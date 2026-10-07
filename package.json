@@ -1,0 +1,47 @@
+{
+  "name": "trakt-notification",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Trakt 播出提醒推送服务 —— 可部署于 Cloudflare Workers / Docker 等平台",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --experimental-strip-types src/platform/node.ts",
+    "dev:node": "node --env-file-if-exists=.env --experimental-strip-types src/platform/node.ts",
+    "dev:cf": "wrangler dev",
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/platform/node.ts",
+    "db:init": "node --env-file-if-exists=.env --experimental-strip-types scripts/db-init.ts",
+    "db:sql": "node --env-file-if-exists=.env --experimental-strip-types scripts/db-sql.ts",
+    "secrets": "node scripts/generate-secrets.mjs",
+    "fake-trakt": "node scripts/fake-trakt.mjs",
+    "fake-tmdb": "node scripts/fake-tmdb.mjs",
+    "seed:demo": "node --env-file-if-exists=.env --experimental-strip-types scripts/seed-demo.ts",
+    "probe:switch": "node scripts/probe-switch.cjs",
+    "dev-login": "node --env-file-if-exists=.env --experimental-strip-types scripts/dev-login.ts",
+    "dev-cron": "node --env-file-if-exists=.env --experimental-strip-types scripts/dev-cron.ts",
+    "deploy:cf": "wrangler deploy",
+    "deploy:d1": "node --env-file-if-exists=.env --experimental-strip-types scripts/db-sql.ts --out=.d1-schema.sql && wrangler d1 execute trakt-notification --file=.d1-schema.sql --remote && node -e \"require('node:fs').rmSync('.d1-schema.sql',{force:true})\"",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:quick": "node --experimental-strip-types tests/verify.mjs",
+    "test:ui": "node --experimental-strip-types tests/ui.smoke.mjs",
+    "test:all": "npm run lint && npm run test:quick && npm run test:ui && npm test"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "hono": "^4.6.14"
+  },
+  "optionalDependencies": {
+    "@hono/node-server": "^1.13.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.149.0"
+  },
+  "engines": {
+    "node": ">=22.9.0"
+  }
+}

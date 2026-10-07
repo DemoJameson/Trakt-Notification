@@ -1,0 +1,52 @@
+# 依赖
+node_modules/
+.pnp/
+.pnp.js
+
+# 构建产物
+dist/
+build/
+.next/
+.wrangler/
+.wrangler-dryrun/
+*.tsbuildinfo
+
+# 环境变量与密钥 —— 绝对不要提交
+.env
+.env.local
+.env.*.local
+
+# WorkBuddy 的本地工作数据（开发记忆、踩坑记录）
+# 里面没有密钥，但记的是**开发过程**（实测、踩坑、架构决策），
+# 不属于项目代码，换机器时也不会用到 —— 本地保留即可。
+.workbuddy/
+
+# 本地数据（自托管时的 SQLite 文件，含加密后的 token）
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# npm run db:sql / deploy:d1 的临时产物
+.d1-schema.sql
+
+# 日志
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Serena（IDE 助手）本地状态：project.yml / project.local.yml 都按机器走
+.serena/
+
+# 编辑器 / 系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# 浏览器自动化产出的截图 / 快照（本地核对用）
+.playwright-cli/
+.playwright/

@@ -1,0 +1,15 @@
+# 统一按 LF 存与检出。
+#
+# 为什么必须显式写：本机 git 的 core.autocrlf=true，工作区会被转成 CRLF。
+# 但这个项目要部署到 Cloudflare Workers / Docker / Node（都是 Linux），
+# 而 CRLF 的 Dockerfile 在续行（`\`）处会出问题，脚本里的 shebang 也会失效。
+# 不钉住的话，取决于每台机器的 autocrlf 设置，同一个提交在各处表现不一致。
+* text=auto eol=lf
+
+# 二进制：不要做任何换行转换
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.db binary
+*.sqlite binary

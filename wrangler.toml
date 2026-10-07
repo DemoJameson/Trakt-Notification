@@ -1,0 +1,85 @@
+# ===================================================================
+# Cloudflare Workers 部署配置
+#
+# 这是本项目的「最佳体验」平台：
+#   - Cron Triggers 最小 1 分钟粒度（免费版 5 个触发器/账号）
+#   - D1 免费额度：5M 行读/天、100k 行写/天、5GB 存储
+#   - 100k 请求/天
+#
+# ⚠️ 免费版限制：单次调用 CPU 时间仅 10ms（网络等待不计入）。
+#    因此 tick 必须分页批处理（TICK_BATCH_SIZE 默认 5，不是 50），避免单次跑太久。
+#    若用户数较多，升级到 Paid（$5/月）可把 CPU 上限提到 30 秒。
+#
+# ⚠️ 免费版 KV 写入只有 1000 次/天，所以状态一律存 D1，不要用 KV。
+# ===================================================================
+
+name = "trakt-notification"
+main = "src/platform/cloudflare.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ---- 定时调度：每分钟一次 ----
+# 1 分钟粒度才能做到"播出前 30 分钟提醒"这种精度，免费版即可。
+# 调度器晚跑不会丢通知：planner 用 notify_at <= now 筛选 + 2 天回看窗口。
+[triggers]
+crons = ["*/1 * * * *"]
+
+# ---- D1 数据库 ----
+# 这是本实例已经创建好的 database_id。
+# fork / 克隆后必须替换成自己的：
+#   1) npx wrangler d1 create trakt-notification
+#   2) 把命令输出的 database_id 填到下面
+#   3) 建表：npm run deploy:d1
+[[d1_databases]]
+binding = "DB"
+database_name = "trakt-notification"
+database_id = "e558ee0c-0a3b-4e22-9246-9a40d609dc53"
+
+# ---- 静态资源（前端）----
+# 前端是 public/index.html —— 无构建步骤，改完直接部署。
+# Workers Assets 直接托管它，静态请求免费且不计入请求配额；
+# /api/* 由 Worker 处理，其余路径交给静态资源。
+#
+# not_found_handling 必须是 "single-page-application"：静态资源里只有
+# index.html，命中不了 `/`（它不等于 /index.html）就会 404。SPA 回退让根路径
+# 与任何未知路径都返回应用外壳，再由前端 hash 路由决定显示哪一屏。
+# 本项目是 hash 路由（/ 之后用 #/rules 这类），不需要服务端按路径渲染。
+#
+# run_worker_first 必须包含 /api/*：默认是 assets-first；浏览器地址栏
+# 直接打开 /api/xxx 时带 Sec-Fetch-Mode: navigate，未命中静态资源会走
+# SPA 回退而不是 Worker。显式声明 /api/* 先走 Worker，API 直接访问
+# 也能返回 JSON，而不是把 index.html 当响应。
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[vars]
+DB_DRIVER = "d1"
+# 时区相关的默认值；用户级时区存在 users.timezone
+DEFAULT_TIMEZONE = "Asia/Shanghai"
+# 与本地 .env 一致：多人共用这份部署，各自用 Trakt 账号登录，数据按 user_id 隔离
+ALLOW_MULTI_USER = "true"
+# 部署地址：既是管理页里调度端点的前缀，也是 CORS 默认放行的唯一来源。
+# 这是本实例的实际地址；fork / 克隆后必须改成你自己的地址，
+# 否则浏览器同源请求会被 CORS 挡下。
+BASE_URL = "https://trakt-notification.demojameson.workers.dev"
+
+# 日志采样，便于排查投递问题
+[observability]
+enabled = true
+
+# -------------------------------------------------------------------
+# 密钥通过 wrangler secret 注入，不要写在这个文件里：
+#   npx wrangler secret put TRAKT_CLIENT_ID     # 只需要 Client ID，本项目不支持 client_secret
+#   npx wrangler secret put ENCRYPTION_KEY      # openssl rand -base64 32
+#   npx wrangler secret put CRON_SECRET         # openssl rand -hex 32
+#   npx wrangler secret put ADMIN_SECRET        # 认领实例 / 管理后台口令（必填）
+#   npx wrangler secret put SESSION_SECRET      # openssl rand -hex 32
+#   # 可选：TMDB_API_KEY（片名中文兜底）；多用户部署再配 REGISTRATION_SECRET
+# -------------------------------------------------------------------
+
+# ---- 本地开发 ----
+# npx wrangler dev
+# 手动触发一次 tick：curl http://localhost:8787/__scheduled
