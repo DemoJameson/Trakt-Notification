@@ -31,6 +31,13 @@ function assertConfigUrls(def: ChannelDefinition<unknown>, config: Record<string
   }
 }
 
+/** 必填项缺失清单（创建 / 修改共用，避免两条写入路径漂移） */
+function missingRequired(def: ChannelDefinition<unknown>, config: Record<string, unknown>): string[] {
+  return def.configFields
+    .filter((f) => f.required && !String(config[f.name] ?? '').trim())
+    .map((f) => f.label)
+}
+
 /**
  * 推送渠道管理。
  *
@@ -70,9 +77,7 @@ channelRoutes.post('/', async (c) => {
 
   // 🔴 先补默认值再校验：`default` 是字段自己声明的合法答案（见 registry.withDefaults）
   const config = withDefaults(def.type, body.config ?? {})
-  const missing = def.configFields
-    .filter((f) => f.required && !String(config[f.name] ?? '').trim())
-    .map((f) => f.label)
+  const missing = missingRequired(def, config)
   if (missing.length) {
     return c.json({ error: 'MISSING_FIELDS', message: `缺少必填项：${missing.join('、')}`, missing }, 400)
   }
@@ -215,9 +220,14 @@ channelRoutes.patch('/:id', async (c) => {
       }
     }
 
-    // 改完的 URL 也要过一遍白名单 —— 与创建路径共用同一份校验，
-    // 否则"创建时被拒、改一下就能存进去"会成为一个静默的绕过口子
+    // 必填项校验与创建路径共用同一份 —— 否则"创建时被拒、改一下就能清空"
+    // 会成为一个静默的口子（渠道照常保存，只在发送时才报"缺少必填项"）
     if (def) {
+      const missing = missingRequired(def, body.config)
+      if (missing.length) {
+        return c.json({ error: 'MISSING_FIELDS', message: `缺少必填项：${missing.join('、')}`, missing }, 400)
+      }
+      // 改完的 URL 也要过一遍白名单 —— 与创建路径共用同一份校验
       try {
         assertConfigUrls(def, body.config)
       } catch (e) {

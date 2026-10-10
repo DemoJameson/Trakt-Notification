@@ -944,10 +944,19 @@ async function sendOne(deps: SchedulerDeps, task: SendTask, result: TickResult):
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     })
   } catch (e) {
-    // 网络异常等：走重试
+    // 网络异常等：走重试。**同样计入渠道失败计数** —— 熔断看的是"这个渠道连续
+    // 发不出去"，而 DNS 失败 / 连接拒绝 / 超时和 5xx 一样属于发不出去。早先这里
+    // 只在重试用尽时才 recordFailure，导致一个彻底不可达的端点几乎永远到不了
+    // 阈值（每条投递要熬过 5 次退避才计一次），与 HTTP 失败路径不一致。
     const { willRetry } = await deps.deliveries.markFailed(task.deliveryId, (e as Error).message, null, { baseTime: task.now })
     result.failed++
-    if (!willRetry) await deps.channels.recordFailure(task.channel.id)
+    const { disabled, failStreak } = await deps.channels.recordFailure(task.channel.id)
+    if (disabled) {
+      console.warn(`[tick] 渠道 ${task.channel.name} 连续失败 ${failStreak} 次，已自动停用`)
+    }
+    if (!willRetry) {
+      console.warn(`[tick] 投递 ${task.deliveryId} 重试次数已用尽，放弃`)
+    }
     return
   }
 
@@ -989,10 +998,17 @@ async function processRetries(deps: SchedulerDeps, now: Date, result: TickResult
 
   const tasks: SendTask[] = []
   for (const d of due) {
-    if (!(await deps.deliveries.claimRetry(d.id))) continue // 别人抢先了
+    if (!(await deps.deliveries.claimRetry(d.id, now.getTime()))) continue // 别人抢先了
     const channel = await deps.channels.get(d.channelId)
     if (!channel) {
       await deps.deliveries.markSkipped(d.id, '渠道已被删除')
+      continue
+    }
+    // ⚠️ 渠道被**停用**（手动或熔断）后不能再重试：channels.get() 不做启用过滤
+    //    （只有 listEnabled 过滤），早先这里照单全收，于是熔断"避免死信道无限
+    //    重试"的目标被绕过。标成 skipped 保留历史。
+    if (!channel.enabled || channel.disabledAt != null) {
+      await deps.deliveries.markSkipped(d.id, '渠道已停用，不再重试')
       continue
     }
     tasks.push({

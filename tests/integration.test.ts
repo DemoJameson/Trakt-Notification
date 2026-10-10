@@ -942,6 +942,102 @@ describe('失败与重试', () => {
     expect(await h.deps.channels.listEnabled(h.userId)).toHaveLength(0)
   })
 
+  /**
+   * 回归：渠道被**停用**（手动或熔断）后，它名下到期的失败重试不该再发出。
+   *
+   * 原 processRetries 用 channels.get() 取渠道，而 get() 不过滤 enabled /
+   * disabled_at —— 于是"熔断避免死信道无限重试"的目标被绕过，停用的渠道照样发。
+   * 做成差分对照：同一轮里启用渠道照发、停用渠道零外发并被标 skipped。
+   */
+  it('【回归】渠道被停用后，到期的失败重试不再发出', async () => {
+    const chOn = await h.deps.channels.insert(h.userId, {
+      type: 'webhook', name: 'on', config: { url: 'https://hooks.example.com/on' },
+    })
+    const chOff = await h.deps.channels.insert(h.userId, {
+      type: 'webhook', name: 'off', config: { url: 'https://hooks.example.com/off' },
+    })
+    await h.deps.channels.update(chOff.id, { enabled: false })
+
+    mock = installMockFetch([{ match: 'hooks.example.com', reply: { ok: true } }])
+
+    const enqueueDue = async (channelId: string, itemKey: string): Promise<string> => {
+      await h.deps.deliveries.enqueue({
+        userId: h.userId, ruleId: 'r1', channelId, itemKey, notifyAt: NOW.getTime(), title: 't', body: 'b',
+      })
+      const row = await h.db.first<{ id: string }>('SELECT id FROM deliveries WHERE channel_id = ?', [channelId])
+      await h.deps.deliveries.claimFresh(row!.id) // attempts 0 → 1
+      await h.deps.deliveries.markFailed(row!.id, 'boom', 500, { baseTime: NOW.getTime() - 10 * 60 * 1000 })
+      return row!.id
+    }
+
+    const idOn = await enqueueDue(chOn.id, 'episodic:1:S1E1')
+    const idOff = await enqueueDue(chOff.id, 'episodic:1:S1E2')
+
+    await runTick(h.deps, { now: NOW, skipLock: true })
+
+    // 对照组：启用渠道的重试真的发了
+    expect(mock.countOf('/on')).toBe(1)
+    const on = await h.db.first<{ status: string }>('SELECT status FROM deliveries WHERE id = ?', [idOn])
+    expect(on!.status).toBe('sent')
+
+    // 停用渠道：零外发，且被标 skipped（不再无限重试）
+    expect(mock.countOf('/off')).toBe(0)
+    const off = await h.db.first<{ status: string }>('SELECT status FROM deliveries WHERE id = ?', [idOff])
+    expect(off!.status).toBe('skipped')
+  })
+
+  /**
+   * 回归：传输层失败（fetch 抛异常）也要计入渠道熔断计数，与 HTTP 失败一致。
+   * 原实现在 catch 分支里只在重试用尽时 recordFailure，彻底不可达的端点几乎到不了阈值。
+   */
+  it('【回归】传输层失败也计入渠道熔断计数', async () => {
+    mock = installMockFetch(
+      standardRoutes(calendarResponse([FINALE_EPISODE]), [
+        { match: 'hooks.example.com', reply: () => { throw new Error('fetch failed') } },
+      ]),
+    )
+    await h.deps.rules.insert(h.userId, {
+      name: 'r', content: { episodes: { all: true } }, offsetMinutes: 0, mode: 'realtime',
+    })
+    const channelId = (await h.deps.channels.insert(h.userId, {
+      type: 'webhook', name: 'wh', config: { url: 'https://hooks.example.com/abc' },
+    })).id
+
+    await runTick(h.deps, { now: NOW, skipLock: true })
+
+    const ch = await h.deps.channels.get(channelId)
+    expect(ch!.failStreak).toBe(1)
+  })
+
+  /**
+   * 回归：reclaimStuck 不能把"正在发送的重试"误回收。
+   * 重试行的 created_at 是入队时间（可能几小时前），只有 claimRetry 写入的
+   * next_retry_at 才代表本次开始发送的时刻。
+   */
+  it('【回归】reclaimStuck 只回收真正卡死的行，不误伤正在发送的重试', async () => {
+    const chId = (await h.deps.channels.insert(h.userId, {
+      type: 'webhook', name: 'wh', config: { url: 'https://hooks.example.com/abc' },
+    })).id
+    const now = Date.now()
+    const insert = (id: string, itemKey: string, claimedAt: number) =>
+      h.db.run(
+        "INSERT INTO deliveries (id, user_id, rule_id, channel_id, item_key, notify_at, title, status, attempts, next_retry_at, created_at) " +
+        "VALUES (?, ?, 'r1', ?, ?, ?, 't', 'sending', 2, ?, ?)",
+        [id, h.userId, chId, itemKey, now, claimedAt, now - 60 * 60 * 1000],
+      )
+
+    await insert('d-inflight', 'episodic:1:S1E1', now) // 刚刚认领
+    await insert('d-stuck', 'episodic:1:S1E2', now - 20 * 60 * 1000) // 开始发送已 20 分钟
+
+    const reclaimed = await h.deps.deliveries.reclaimStuck(10 * 60 * 1000)
+    expect(reclaimed).toBe(1)
+
+    const inflight = await h.db.first<{ status: string }>("SELECT status FROM deliveries WHERE id = 'd-inflight'")
+    expect(inflight!.status).toBe('sending')
+    const stuck = await h.db.first<{ status: string }>("SELECT status FROM deliveries WHERE id = 'd-stuck'")
+    expect(stuck!.status).toBe('failed')
+  })
+
   it('Trakt 拉取失败不会让整轮崩掉', async () => {
     mock = installMockFetch([
       // 用 403 而不是 503：503 会触发客户端指数退避（0.8+1.6+3.2 秒），

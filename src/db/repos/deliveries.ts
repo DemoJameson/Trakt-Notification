@@ -196,10 +196,16 @@ export function deliveryRepo(db: Db) {
      * `WHERE status='failed'` 成为真正的 CAS：两个 worker 同时看到同一行时，
      * 只有一个能把 status 从 failed 改成 sending，另一个 changes=0 自然放弃。
      */
-    async claimRetry(id: string): Promise<boolean> {
+    async claimRetry(id: string, now: number = Date.now()): Promise<boolean> {
+      // ⚠️ 顺手把 next_retry_at 写成**本次开始发送的时刻**。重试行的 created_at
+      //    是当初入队时间（可能已是几小时前），reclaimStuck 若只看 created_at，
+      //    会把一条刚进入 sending 的重试误判成"卡死"并回收重发。发送期间借
+      //    next_retry_at 记开始时刻，回收据此判断；markFailed / markSent /
+      //    reclaimStuck 都会把它改回"下一次重试时刻"或清空。
       const r = await db.run(
-        `UPDATE deliveries SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status = 'failed'`,
-        [id],
+        `UPDATE deliveries SET status = 'sending', attempts = attempts + 1, next_retry_at = ?
+          WHERE id = ? AND status = 'failed'`,
+        [now, id],
       )
       return r.changes === 1
     },
@@ -245,11 +251,21 @@ export function deliveryRepo(db: Db) {
      * 这些行永远不会被处理 —— 没有这步就会静默丢通知。
      */
     async reclaimStuck(olderThanMs: number): Promise<number> {
-      const cutoff = Date.now() - olderThanMs
+      const now = Date.now()
+      const cutoff = now - olderThanMs
+      // ⚠️ 判据分两种，因为两种行的"开始发送时刻"落在不同列：
+      //   · 首次投递（attempts<=1）：created_at 就是开始发送的时刻
+      //   · 重试（attempts>1）：created_at 是当初入队时间，只有 next_retry_at
+      //     在 claimRetry 时被写成开始时刻（见那里的说明）
+      //   早先一律用 created_at，会把正在发送的重试行立即回收 —— 重叠 tick 下重复推送。
       const r = await db.run(
         `UPDATE deliveries SET status = 'failed', next_retry_at = ?, last_error = '投递过程中断，已回收重试'
-          WHERE status = 'sending' AND created_at < ?`,
-        [Date.now(), cutoff],
+          WHERE status = 'sending'
+            AND (
+              (attempts <= 1 AND created_at < ?)
+              OR (attempts > 1 AND next_retry_at IS NOT NULL AND next_retry_at < ?)
+            )`,
+        [now, cutoff, cutoff],
       )
       return r.changes
     },
@@ -264,8 +280,10 @@ export function deliveryRepo(db: Db) {
       userId: string,
       opts: { status?: string; limit?: number; offset?: number } = {},
     ): Promise<{ total: number; items: Delivery[] }> {
-      const limit = Math.min(opts.limit ?? 50, 200)
-      const offset = opts.offset ?? 0
+      // ⚠️ 必须夹到 [1,200]：SQLite 里 `LIMIT -1` 表示**不限行数**，
+      //    只写 Math.min(..., 200) 的话 ?limit=-1 会把全部历史一次吐出来。
+      const limit = Math.max(1, Math.min(opts.limit ?? 50, 200))
+      const offset = Math.max(0, opts.offset ?? 0)
       const where = opts.status && opts.status !== 'all' ? ` AND status = ?` : ''
       const args: Array<string | number> = [userId]
       if (where) args.push(opts.status!)

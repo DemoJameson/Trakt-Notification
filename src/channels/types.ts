@@ -360,27 +360,138 @@ export async function parseTextResponse(
 /**
  * SSRF 防护：自建服务器地址与自定义 webhook 必须校验。
  * 只允许 https，且禁止内网 / 环回 / 链路本地地址。
+ *
+ * ⚠️ 必须同时覆盖 IPv4 与 IPv6。`URL.hostname` 对 IPv6 返回的是**带方括号**的
+ *    形式（`[::1]`），早先写成 `host === '::1'` 的等值判断永远不成立 —— 于是
+ *    `https://[::1]/`、`https://[::ffff:127.0.0.1]/`、`https://[fd00::1]/`
+ *    全部被放行。所以这里先剥方括号，再按 IPv4 / IPv6 分别判网段。
+ *
+ * ⚠️ 已知限制（刻意保留、不是遗漏）：这里只看**字面主机名**。一个公网域名
+ *    （如 `2130706433.nip.io`）解析到内网地址时无法在解析前发现，这类 DNS
+ *    rebinding 不在本函数能力范围内。真正的兜底是各渠道的 `redirect: 'manual'`
+ *    （不跟随跳转）与"只允许官方域名"白名单。
  */
 export function assertSafeUrl(raw: string): URL {
   const url = new URL(raw)
   if (url.protocol !== 'https:') {
     throw new Error('出于安全考虑，仅允许 https 地址')
   }
-  const host = url.hostname.toLowerCase()
-  const blocked =
-    host === 'localhost' ||
-    host === '::1' ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal') ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-  if (blocked) {
+  // IPv6 在 hostname 里带方括号，先剥掉再判
+  const host = url.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+  if (isBlockedHost(host)) {
     throw new Error('不允许指向内网地址')
   }
   return url
+}
+
+/** 域名后缀 / IPv4 / IPv6 的统一内网判定。返回 true = 拒绝 */
+function isBlockedHost(host: string): boolean {
+  // 保留后缀
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return true
+  // 含冒号 = IPv6（URL 解析器会把 IPv4 字面量归一成点分十进制，不会走到这里）
+  if (host.includes(':')) return isBlockedIpv6(host)
+  // 点分十进制 IPv4 字面量
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return isBlockedIpv4(host)
+  // 形如 `127.0.0.1.nip.io` 的域名：前缀是私网 IP 也拒（保持既有行为）
+  return (
+    /^10\./.test(host) ||
+    /^127\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  )
+}
+
+/**
+ * IPv4 私网 / 环回 / 链路本地 / 保留段。
+ * ⚠️ `new URL()` 已经把 `0x7f.0.0.1`、`2130706433`、`127.1` 这类写法归一成
+ *    点分十进制，所以这里只需处理规范形态。
+ */
+function isBlockedIpv4(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  if (!m) return false // 普通域名，不是 IP 字面量
+  const o = m.slice(1).map(Number)
+  if (o.some((n) => n > 255)) return true // 非法也拒
+  const a = o[0]!
+  const b = o[1]!
+  const c = o[2]!
+  if (a === 0) return true // 0.0.0.0/8（含 0.0.0.0）
+  if (a === 10) return true // 10/8
+  if (a === 100 && b >= 64 && b <= 127) return true // 100.64/10 CGNAT
+  if (a === 127) return true // 环回
+  if (a === 169 && b === 254) return true // 链路本地
+  if (a === 172 && b >= 16 && b <= 31) return true // 172.16/12
+  if (a === 192 && b === 0 && c === 0) return true // 192.0.0/24
+  if (a === 192 && b === 168) return true // 192.168/16
+  if (a === 198 && (b === 18 || b === 19)) return true // 198.18/15 基准测试
+  if (a >= 224) return true // 组播 + 保留（224/4 + 240/4）
+  return false
+}
+
+/** IPv6 未指定 / 环回 / ULA / 链路本地 / 组播 / IPv4 映射 / NAT64 */
+function isBlockedIpv6(host: string): boolean {
+  const bytes = ipv6ToBytes(host)
+  if (!bytes) return true // 解析不了就保守拒绝
+  if (bytes.every((b) => b === 0)) return true // ::
+  if (bytes.slice(0, 15).every((b) => b === 0) && bytes[15] === 1) return true // ::1
+  // IPv4 映射 ::ffff:0:0/96 —— 取内嵌 IPv4 再按 IPv4 规则判一次
+  if (bytes.slice(0, 10).every((b) => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff) {
+    return isBlockedIpv4(bytes.slice(12, 16).join('.'))
+  }
+  // NAT64 知名前缀 64:ff9b::/96
+  if (
+    bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b &&
+    bytes.slice(4, 12).every((b) => b === 0)
+  ) {
+    return isBlockedIpv4(bytes.slice(12, 16).join('.'))
+  }
+  if ((bytes[0]! & 0xfe) === 0xfc) return true // fc00::/7 ULA
+  if (bytes[0] === 0xfe && (bytes[1]! & 0xc0) === 0x80) return true // fe80::/10 链路本地
+  if (bytes[0] === 0xff) return true // ff00::/8 组播
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x0d && bytes[3] === 0xb8) return true // 2001:db8::/32 文档
+  return false
+}
+
+/** 把 IPv6 文本（含内嵌 IPv4）解析成 16 字节；解析失败返回 null */
+function ipv6ToBytes(addr: string): number[] | null {
+  let a = addr.toLowerCase()
+  const zone = a.indexOf('%') // 去掉 scope id（fe80::1%eth0）
+  if (zone >= 0) a = a.slice(0, zone)
+
+  // 内嵌 IPv4（如 ::ffff:127.0.0.1）：折成两个 hextet
+  const dot = a.lastIndexOf('.')
+  if (dot >= 0) {
+    const colon = a.lastIndexOf(':', dot)
+    if (colon < 0) return null
+    const octets = a.slice(colon + 1).split('.').map(Number)
+    if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null
+    const hi = ((octets[0]! << 8) | octets[1]!).toString(16)
+    const lo = ((octets[2]! << 8) | octets[3]!).toString(16)
+    a = a.slice(0, colon + 1) + hi + ':' + lo
+  }
+
+  const halves = a.split('::')
+  if (halves.length > 2) return null
+  const parse = (s: string): number[] | null => {
+    if (!s) return []
+    const out: number[] = []
+    for (const g of s.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null
+      const v = parseInt(g, 16)
+      out.push(v >> 8, v & 0xff)
+    }
+    return out
+  }
+  if (halves.length === 1) {
+    const b = parse(a)
+    return b && b.length === 16 ? b : null
+  }
+  const left = parse(halves[0]!)
+  const right = parse(halves[1]!)
+  if (!left || !right) return null
+  const fill = 16 - left.length - right.length
+  if (fill < 0) return null
+  return [...left, ...new Array<number>(fill).fill(0), ...right]
 }
 
 /** 指数退避：1m / 5m / 30m / 2h / 6h，最多 5 次 */

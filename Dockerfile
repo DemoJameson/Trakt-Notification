@@ -57,7 +57,10 @@ EXPOSE 3000
 
 # 容器内自带调度，无需外部 cron。
 # 健康检查同时暴露"上次 tick 时间"，方便发现调度卡死。
+# ⚠️ 不能只判 HTTP 200：/api/health 在"数据库连不上 / 表没建"时仍返回 200
+#    （只有配置错误才 503），那样容器会被误判为健康。改为检查响应体里的
+#    ready 字段（基础设施就绪）—— 它不把"还没登录 Trakt"这类设置态算作故障。
 HEALTHCHECK --interval=60s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -fsS http://localhost:3000/api/health || exit 1
+  CMD curl -fsS http://localhost:3000/api/health | grep -q '"ready":true' || exit 1
 
 CMD ["node", "--experimental-strip-types", "src/platform/node.ts"]

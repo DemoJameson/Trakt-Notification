@@ -10,7 +10,7 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
-import { createContext, selfCheck, type AppContext, type WorkerEnv } from './context.ts'
+import { createContext, dbReady, selfCheck, type AppContext, type WorkerEnv } from './context.ts'
 import { BadRequestError, resolveCorsOrigin } from './http.ts'
 import { detectRuntime } from './runtime.ts'
 import { requireAuth, requireCronSecret, requireUser, hasAdminCredential } from './middleware/cron-auth.ts'
@@ -171,6 +171,13 @@ export function createApp(options: CreateAppOptions = {}) {
 
     return c.json({
       ok: problems.length === 0,
+      /**
+       * 基础设施是否就绪（数据库可达 + 表已建）。与 `ok` 刻意分开：
+       * `ok` 还会因"还没登录 Trakt""没配 TMDB key"这类**不影响可用性**的
+       * 提示变成 false，而 Docker HEALTHCHECK 只该因真正的故障判死。
+       * 见 Dockerfile 的 HEALTHCHECK 与 context.ts 的 dbReady。
+       */
+      ready: await dbReady(ctx),
       runtime: detectRuntime(),
       now: new Date().toISOString(),
       dbDriver: ctx.config.dbDriver,

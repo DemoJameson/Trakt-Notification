@@ -174,6 +174,24 @@ export async function selfCheck(
   return problems
 }
 
+/**
+ * 基础设施就绪 —— 只回答"数据库可达且表已建"，**不含**任何业务/配置问题。
+ *
+ * 为什么要与 selfCheck 分开：Docker HEALTHCHECK 用它判容器死活，而 selfCheck
+ * 的 problems 里混着"还没登录 Trakt""没配 TMDB key"这类**不影响服务可用性**
+ * 的提示 —— 拿 selfCheck 的结果当健康判据，会让一个刚部署、还没人登录的
+ * 容器永远显示 unhealthy。
+ */
+export async function dbReady(ctx: AppContext): Promise<boolean> {
+  try {
+    await ctx.db.first(`SELECT 1 AS ok`)
+    await ctx.db.first(`SELECT COUNT(*) AS n FROM users`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function lastTickAt(ctx: AppContext): Promise<number | null> {
   const info = await ctx.cache.get<{ at: number }>('tick:last')
   return info?.at ?? null

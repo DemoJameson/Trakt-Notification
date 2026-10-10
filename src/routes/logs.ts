@@ -23,7 +23,8 @@ logRoutes.get('/', async (c) => {
   const userId = currentUserId(c)
 
   const status = c.req.query('status') ?? 'all'
-  const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 200)
+  // 夹到 [1,200]：负数是合法的 Number，而 SQLite 的 `LIMIT -1` 等于不限行数
+  const limit = Math.max(1, Math.min(Number(c.req.query('limit') ?? 50) || 50, 200))
   const offset = Math.max(Number(c.req.query('offset') ?? 0) || 0, 0)
 
   const { total, items } = await ctx.deliveries.list(userId, { status, limit, offset })

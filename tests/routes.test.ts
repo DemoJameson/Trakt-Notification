@@ -241,6 +241,17 @@ describe('投递日志的片名按当前界面语言显示', () => {
     const body = await res.json() as { deliveries: Array<{ title: string }> }
     expect(body.deliveries[0]!.title).toBe('Slow Horses S6E4')
   })
+
+  it('【回归】limit 为负数时不放开上限（SQLite 的 LIMIT -1 等于不限行数）', async () => {
+    const user = await seedDelivery()
+    const res = await req('/api/logs?limit=-1', { headers: await logCookie(user.id) })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { limit: number; deliveries: unknown[] }
+    expect(body.limit).toBeGreaterThanOrEqual(1)
+    expect(body.limit).toBeLessThanOrEqual(200)
+    // 关键：返回行数不能超过被夹住的 limit（修复前 limit=-1 且行数 > -1）
+    expect(body.deliveries.length).toBeLessThanOrEqual(body.limit)
+  })
 })
 
 describe('免登录接口不泄漏内部用户标识', () => {
@@ -260,6 +271,21 @@ describe('免登录接口不泄漏内部用户标识', () => {
     expect(text).not.toContain('u-secret-id-123')
     const body = JSON.parse(text) as { scheduler: { reauthRequiredAccounts: number } }
     expect(body.scheduler.reauthRequiredAccounts).toBe(1)
+  })
+
+  it('【回归】/api/health 暴露 ready：数据库不可达时为 false（Docker HEALTHCHECK 靠它判死）', async () => {
+    // 正常库：ready 为 true（哪怕还没登录 Trakt，那不算基础设施故障）
+    const ok = await req('/api/health')
+    expect((await ok.json() as { ready: boolean }).ready).toBe(true)
+
+    // 数据库抛错：仍是 200（契约不变），但 ready 必须是 false
+    const boom = { prepare: () => { throw new Error('db down') } } as unknown as WorkerEnv['DB']
+    const broken: WorkerEnv = { ...makeEnv(db), DB: boom }
+    const res = await req('/api/health', undefined, broken)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ready: boolean; ok: boolean }
+    expect(body.ready).toBe(false)
+    expect(body.ok).toBe(false)
   })
 })
 
@@ -1199,8 +1225,14 @@ describe('渠道写入校验', () => {
     expect((await res.json() as { missing: string[] }).missing).toEqual(['服务地址'])
   })
 
-  it('SSRF：内网地址被硬拦截', async () => {
-    for (const url of ['http://127.0.0.1/x', 'https://192.168.1.10/hook', 'https://localhost/hook', 'https://10.0.0.5/hook']) {
+  it('SSRF：内网地址被硬拦截（含 IPv6 / 0.0.0.0）', async () => {
+    for (const url of [
+      'http://127.0.0.1/x', 'https://192.168.1.10/hook', 'https://localhost/hook', 'https://10.0.0.5/hook',
+      // 回归：URL.hostname 对 IPv6 返回带方括号的形式，早先 host === '::1' 永远不成立，
+      // 于是这些地址全被放行（见 assertSafeUrl）
+      'https://[::1]/hook', 'https://[::ffff:127.0.0.1]/hook', 'https://[fd00::1]/hook',
+      'https://[fe80::1]/hook', 'https://[::]/hook', 'https://0.0.0.0/hook',
+    ]) {
       const res = await post({ type: 'webhook', config: { url } })
       expect(res.status, url).toBe(400)
       expect((await res.json() as { error: string }).error).toBe('UNSAFE_URL')
@@ -1286,6 +1318,24 @@ describe('渠道写入校验', () => {
     })
     expect(res.status).toBe(400)
     expect((await res.json() as { error: string }).error).toBe('UNSAFE_URL')
+  })
+
+  it('【回归】PATCH 也校验必填项 —— 不能"创建时被拒、改一下就能清空"', async () => {
+    const user = (await userRepo(db).getSole())!
+    const { id } = await channelRepo(db, testKey()).insert(user.id, {
+      type: 'bark',
+      name: 'Bark',
+      config: { serverUrl: 'https://api.day.app', deviceKey: 'k1234567890abcdef' },
+    })
+
+    // 把必填的服务地址清空（前端会原样提交用户清掉的值）
+    const res = await req('/api/channels/' + id, {
+      method: 'PATCH',
+      headers: { 'x-admin-secret': ADMIN_SECRET, 'content-type': 'application/json' },
+      body: JSON.stringify({ config: { serverUrl: '  ' } }),
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: string }).error).toBe('MISSING_FIELDS')
   })
 
   it('PATCH 传回打码过的 webhookUrl 时，沿用库里的原文而不是把 **** 存进去', async () => {
