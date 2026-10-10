@@ -100,6 +100,7 @@ select.lang{background:var(--surface);border:1px solid var(--border);color:var(-
   background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text-2);
   cursor:pointer;padding:0;transition:.14s;font-size:14px;line-height:1}
 .tbtn:hover{border-color:var(--text-3);color:var(--text)}
+.tbtn svg{width:15px;height:15px;display:block;fill:currentColor}
 
 main{max-width:1080px;margin:0 auto;padding:24px 20px 72px}
 .page-h{display:flex;align-items:flex-end;gap:14px;margin-bottom:18px;flex-wrap:wrap}
@@ -427,12 +428,15 @@ details summary:hover{color:var(--text)}
    合成一个 zh-Hant 的话，两边用户都拿不到自己习惯的那一份。 */
 const LOCALE_NAME = { 'zh-CN': '简体中文', 'zh-TW': '繁體中文（台灣）', 'zh-HK': '繁體中文（香港）', en: 'English' };
 const LOCALES = ['zh-CN', 'zh-TW', 'zh-HK', 'en'];
+/** 项目仓库地址；顶栏提供入口，方便查看源码、反馈问题和部署说明。 */
+const REPO_URL = 'https://github.com/DemoJameson/Trakt-Notification';
 
 const I18N = {
   'zh-CN': {
     'brand.name': 'Trakt 播出提醒',
     'nav.dash': '概览', 'nav.rules': '规则', 'nav.channels': '渠道',
     'nav.preview': '推送预览', 'nav.logs': '投递日志', 'nav.settings': '设置',
+    'link.repo': 'GitHub 仓库',
 
     'theme.system': '跟随系统', 'theme.light': '浅色', 'theme.dark': '深色',
 
@@ -788,6 +792,7 @@ const I18N = {
     'brand.name': 'Trakt 播出提醒',
     'nav.dash': '總覽', 'nav.rules': '規則', 'nav.channels': '通道',
     'nav.preview': '推送預覽', 'nav.logs': '投遞日誌', 'nav.settings': '設定',
+    'link.repo': 'GitHub 儲存庫',
 
     'theme.system': '跟隨系統', 'theme.light': '淺色', 'theme.dark': '深色',
 
@@ -1150,6 +1155,7 @@ const I18N = {
     'brand.name': 'Trakt 播出提醒',
     'nav.dash': '總覽', 'nav.rules': '規則', 'nav.channels': '頻道',
     'nav.preview': '推送預覽', 'nav.logs': '遞送記錄', 'nav.settings': '設定',
+    'link.repo': 'GitHub 儲存庫',
 
     'theme.system': '跟隨系統', 'theme.light': '淺色', 'theme.dark': '深色',
 
@@ -1503,6 +1509,7 @@ const I18N = {
     'brand.name': 'Trakt Airing Alerts',
     'nav.dash': 'Overview', 'nav.rules': 'Rules', 'nav.channels': 'Channels',
     'nav.preview': 'Preview', 'nav.logs': 'Delivery log', 'nav.settings': 'Settings',
+    'link.repo': 'GitHub repository',
 
     'theme.system': 'Match system', 'theme.light': 'Light', 'theme.dark': 'Dark',
 
@@ -1944,6 +1951,16 @@ function themeIcon(mode) {
   return mode === 'light' ? '☀' : mode === 'dark' ? '☾' : '◐';
 }
 
+/**
+ * 顶栏仓库入口图标。
+ *
+ * 用内联 SVG 而不是 emoji：GitHub 的标志已经是通用识别符号，emoji 在不同
+ * 平台上的字形和基线差异较大，和旁边主题按钮放一起会跳。
+ */
+function repoIcon() {
+  return '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
+}
+
 /** 按钮的 aria-label / title：说清"现在是什么"和"点了会变成什么"。 */
 function themeLabel(mode) {
   const next = nextTheme(mode);
@@ -2283,6 +2300,9 @@ function shell() {
       '<nav>' + nav + '</nav>' +
       '<div class="top-right">' +
         (user ? '<span class="chip pri">' + esc(user.username || '') + '</span>' : '') +
+        // 仓库入口：放在用户身份之后、管理/主题之前，登录后随时可回到源码与部署文档。
+        '<a class="tbtn" href="' + REPO_URL + '" target="_blank" rel="noopener noreferrer" aria-label="' + esc(t('link.repo')) +
+          '" title="' + esc(t('link.repo')) + '">' + repoIcon() + '</a>' +
         // 管理控制台入口。
         //
         // ⚠️ 放在**顶栏**而不是登录页：管理会话 tn_admin 与 Trakt 连接完全无关，

@@ -2294,6 +2294,29 @@ function testAdminEntryInHeader() {
 }
 
 /**
+ * 顶栏的仓库入口。
+ *
+ * 回归：页面需要能一键回到源码仓库；新标签打开，并带 noopener/noreferrer。
+ */
+function testRepoLinkInHeader() {
+  console.log('\n[顶栏：仓库入口]')
+  const { shell, S: state } = api
+  const saveSession = state.session, saveRoute = state.route
+  try {
+    state.session = { authenticated: true, user: { username: 'owner' } }
+    state.route = 'dash'
+    const h = shell()
+    eq('登录态下顶栏有仓库链接', /<a class="tbtn" href="https:\/\/github\.com\/DemoJameson\/Trakt-Notification"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/.test(h), true)
+    eq('仓库链接带可访问名', /<a class="tbtn"[^>]*aria-label=/.test(h), true)
+    eq('仓库链接文案来自 link.repo', h.includes(api.esc(t('link.repo'))), true)
+    eq('仓库图标是内联 SVG', /<a class="tbtn"[^>]*><svg /.test(h), true)
+  } finally {
+    state.session = saveSession
+    state.route = saveRoute
+  }
+}
+
+/**
  * 管理控制台「允许新用户注册」的勾选框与标题同一行。
  *
  * 回归：原来标题独占一行、勾选框和说明挤在下一行 —— 视觉上勾选框跟的是说明，
@@ -2314,6 +2337,7 @@ function testAdminRegToggleLayout() {
 
 testTheme()
 testAdminEntryInHeader()
+testRepoLinkInHeader()
 testAdminRegToggleLayout()
 testSwitchClickLogic()
 testConditionalFields()
