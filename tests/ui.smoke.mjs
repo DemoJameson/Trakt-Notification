@@ -2317,6 +2317,50 @@ function testRepoLinkInHeader() {
 }
 
 /**
+ * 窄屏顶栏：导航必须独占一行，且焦点顺序与视觉顺序一致。
+ *
+ * 回归（2026-10-11 用户截图）：导航与右侧控件（用户名/仓库/管理/主题/语言）
+ * 挤在同一行，390px 视口下 `nav` 的可视宽度只剩 6px ——「规则」「渠道」
+ * 实际上点不到（内容 404px，滚动窗口只有 6px）。窄屏必须换行：
+ * 控件一行、导航整行横向滚动。
+ *
+ * 顶栏在 DOM 里放**两份导航**（`.nav-desktop` / `.nav-mobile`，同一份内容
+ * 渲染两次）：桌面单行布局里导航在控件之前，窄屏两行布局里导航在控件之后。
+ * 只放一份 DOM 的话，总有一个断点的 Tab 顺序与视觉顺序相反（会跳行）；
+ * 隐藏的那份 display:none，不参与布局、也不参与焦点。
+ */
+function testMobileTopbarNav() {
+  console.log('\n[顶栏：窄屏导航换行]')
+  const css = htmlNoComments.slice(htmlNoComments.indexOf('<style'), htmlNoComments.indexOf('</style>'))
+  const wide = /@media\(max-width:768px\)\{([\s\S]*?)\n\}/.exec(css)
+  const phone = /@media\(max-width:640px\)\{([\s\S]*?)\n\}/.exec(css)
+  const block = wide ? wide[1] : ''
+  const small = phone ? phone[1] : ''
+  eq('存在 768px 窄屏媒体查询', wide !== null, true)
+  eq('窄屏顶栏允许换行', /\.top-in\{[^}]*flex-wrap:wrap/.test(block), true)
+  eq('窄屏控件排在导航之前', /\.top-right\{[^}]*order:1/.test(block) && /nav\.nav-mobile\{[^}]*order:2/.test(block), true)
+  eq('窄屏导航独占整行（可横向滚动）', /nav\.nav-mobile\{[^}]*(flex:[^;}]*100%|width:100%)/.test(block), true)
+  eq('窄屏切到窄屏导航', /\.nav-desktop\{display:none\}/.test(block) && /nav\.nav-mobile\{[^}]*display:flex/.test(block), true)
+  eq('窄屏不压缩 tab 内边距（触控目标保持原尺寸）', /nav button\{/.test(block), false)
+  eq('品牌只在手机（≤640px）隐藏', /\.brand\{display:none\}/.test(small) && /\.brand\{display:none\}/.test(block), false)
+  eq('桌面隐藏窄屏导航', /nav\.nav-mobile\{display:none\}/.test(css), true)
+  // 两份导航的 DOM 位置：各自与所在断点的视觉顺序一致。
+  const { shell, S: state } = api
+  const saveSession = state.session
+  try {
+    state.session = { authenticated: true, user: { username: 'owner' } }
+    const h = shell()
+    const desktop = h.indexOf('<nav class="nav-desktop">')
+    const right = h.indexOf('class="top-right"')
+    const mobile = h.indexOf('<nav class="nav-mobile">')
+    eq('桌面导航在 DOM 中位于控件之前', desktop !== -1 && desktop < right, true)
+    eq('窄屏导航在 DOM 中位于控件之后', mobile !== -1 && right < mobile, true)
+  } finally {
+    state.session = saveSession
+  }
+}
+
+/**
  * 管理控制台「允许新用户注册」的勾选框与标题同一行。
  *
  * 回归：原来标题独占一行、勾选框和说明挤在下一行 —— 视觉上勾选框跟的是说明，
@@ -2338,6 +2382,7 @@ function testAdminRegToggleLayout() {
 testTheme()
 testAdminEntryInHeader()
 testRepoLinkInHeader()
+testMobileTopbarNav()
 testAdminRegToggleLayout()
 testSwitchClickLogic()
 testConditionalFields()

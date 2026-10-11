@@ -92,6 +92,8 @@ nav button.on{background:var(--primary-soft);color:var(--primary);font-weight:62
 nav .nb{display:inline-block;min-width:16px;padding:0 4px;margin-left:5px;border-radius:8px;
   background:var(--surface-2);color:var(--text-3);font-size:10.5px;font-weight:600;text-align:center}
 nav button.on .nb{background:var(--primary);color:var(--primary-text)}
+/* 窄屏专用导航（见 shell()）：桌面隐藏，≤768px 才显示。 */
+nav.nav-mobile{display:none}
 .top-right{display:flex;align-items:center;gap:8px;flex:none}
 select.lang{background:var(--surface);border:1px solid var(--border);color:var(--text-2);
   border-radius:8px;padding:5px 7px;font:inherit;font-size:12px;cursor:pointer}
@@ -396,10 +398,24 @@ td .err{font-size:11px;color:var(--danger);word-break:break-all;max-width:280px;
 .tbl tr:last-child td{border-bottom:0}
 details summary{cursor:pointer;font-size:12.5px;color:var(--text-2);padding:6px 0;user-select:none}
 details summary:hover{color:var(--text)}
-@media(max-width:640px){
-  .top-in{padding:10px 14px;gap:10px}
-  .brand span{display:none}
+/* 窄屏顶栏：右侧控件一行，导航独占第二行。
+ *
+ * 🔴 原来导航与控件挤在同一行：390px 视口下 nav 的可视宽度只剩 6px
+ *   （内容 404px，滚动窗口 6px），「规则」「渠道」实际上点不到。
+ *   换行后导航拿到整行宽度，横向滚动才有意义。
+ * 断点取 768px：iPad mini（744px）这类窄屏平板也走同一套两行布局。 */
+@media(max-width:768px){
+  .top-in{padding:10px 14px;gap:10px;flex-wrap:wrap}
+  .top-right{order:1;margin-left:auto;gap:6px;max-width:100%;flex-wrap:wrap;justify-content:flex-end}
+  /* 两份导航各自与所在断点的视觉顺序一致（见 shell()）：
+   * 桌面那份在 DOM 里位于控件之前，这里隐藏；显示控件之后的那份。 */
+  .nav-desktop{display:none}
+  nav.nav-mobile{display:flex;order:2;flex:1 1 100%}
   main{padding:16px 14px 60px}
+}
+/* 品牌只在手机隐藏（原设计如此）—— 641–768px 的行一放得下品牌 + 控件。 */
+@media(max-width:640px){
+  .brand{display:none}
 }
 </style>
 </head>
@@ -2297,7 +2313,8 @@ function shell() {
   return '' +
     '<header class="top"><div class="top-in">' +
       '<div class="brand"><span class="dot"></span><span>' + esc(t('brand.name')) + '</span></div>' +
-      '<nav>' + nav + '</nav>' +
+      // 桌面导航：DOM 位于控件之前，与桌面单行布局的视觉顺序一致。
+      '<nav class="nav-desktop">' + nav + '</nav>' +
       '<div class="top-right">' +
         (user ? '<span class="chip pri">' + esc(user.username || '') + '</span>' : '') +
         // 仓库入口：放在用户身份之后、管理/主题之前，登录后随时可回到源码与部署文档。
@@ -2315,6 +2332,9 @@ function shell() {
           '" title="' + esc(themeLabel(S.theme)) + '">' + themeIcon(S.theme) + '</button>' +
         '<select class="lang" data-bind="locale">' + locOpts + '</select>' +
       '</div>' +
+      // 窄屏导航：DOM 位于控件之后 —— 窄屏两行布局里控件在上、导航在下，
+      // 焦点顺序才会与视觉顺序一致（≤768px 时上面那份 display:none）。
+      '<nav class="nav-mobile">' + nav + '</nav>' +
     '</div></header>' +
     '<main>' + viewFor(S.route) + '</main>';
 }
