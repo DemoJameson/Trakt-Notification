@@ -88,7 +88,7 @@ docker run -d --name trakt-notify \
 curl -X POST https://你的地址/api/cron/tick -H "Authorization: Bearer $CRON_SECRET"
 ```
 
-Cloudflare 用自带的 Cron Triggers（默认每分钟一次），Docker / Node 用进程内的定时器，也可以交给 cron-job.org 这类外部服务。调度晚跑几分钟不会漏通知：系统会往回看 2 天，晚到就晚发。
+Cloudflare 用自带的 Cron Triggers（默认每 5 分钟一次），Docker / Node 用进程内的定时器，也可以交给 cron-job.org 这类外部服务。调度晚跑几分钟不会漏通知：系统会往回看 2 天，晚到就晚发。
 
 ---
 

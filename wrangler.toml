@@ -18,11 +18,11 @@ main = "src/platform/cloudflare.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-# ---- 定时调度：每分钟一次 ----
-# 1 分钟粒度才能做到"播出前 30 分钟提醒"这种精度，免费版即可。
+# ---- 定时调度：每 5 分钟一次 ----
+# 5 分钟粒度：通知最多晚 5 分钟发出（"提前 30 分钟"实际落在 25~30 分钟区间）。
 # 调度器晚跑不会丢通知：planner 用 notify_at <= now 筛选 + 2 天回看窗口。
 [triggers]
-crons = ["*/1 * * * *"]
+crons = ["*/5 * * * *"]
 
 # ---- D1 数据库 ----
 # 这是本实例已经创建好的 database_id。
