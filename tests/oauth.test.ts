@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { installMockFetch, type MockFetch, type MockRoute } from './helpers/trakt-mock.ts'
 import { testKey } from './helpers/sqlite.ts'
@@ -12,6 +12,7 @@ import {
   type TokenStore,
 } from '../src/trakt/oauth.ts'
 import { loadConfig } from '../src/config.ts'
+import { createTraktClient } from '../src/trakt/client.ts'
 import { TRAKT_USER_AGENT } from '../src/trakt/headers.ts'
 
 /**
@@ -35,6 +36,8 @@ let mock: MockFetch | null = null
 afterEach(() => {
   mock?.restore()
   mock = null
+  vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 /* ------------------------------------------------------------------ */
@@ -374,5 +377,100 @@ describe('expiresAt 的兜底：缺 expires_in 也不能是 NaN', () => {
       release: async () => {},
     }
     await ensureFreshToken('u1', CREDS, store, locks)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 出站请求超时：挂起必须变成有界失败，而不是拖死整轮 tick              */
+/* ------------------------------------------------------------------ */
+
+describe('出站请求超时保护', () => {
+  it('🔴 请求挂起时按超时失败（没有信号会永远等下去）', async () => {
+    // 生产值 15s 对测试太慢，替换成 40ms —— 测的是「信号真的会中断挂起」，不是具体数值
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal)
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => realTimeout(Math.min(ms, 40)))
+    mock = installMockFetch([
+      {
+        match: '/oauth/device/code',
+        // 模拟「连接挂起」：只有收到 abort 信号才拒绝 —— 与真实 fetch 的行为一致
+        reply: (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+          }),
+      },
+    ])
+    await expect(requestDeviceCode({ clientId: 'cid' })).rejects.toMatchObject({ name: 'TimeoutError' })
+  })
+
+  it('Trakt API 与 OAuth 的每条出站请求都带超时信号', async () => {
+    mock = installMockFetch([
+      {
+        match: '/oauth/device/code',
+        reply: { device_code: 'dc', user_code: 'A', verification_url: 'u', expires_in: 600, interval: 5 },
+      },
+      {
+        match: '/oauth/device/token',
+        reply: { access_token: 'at', refresh_token: 'rt', expires_in: 7_776_000 },
+      },
+      {
+        match: '/oauth/token',
+        reply: { access_token: 'at2', refresh_token: 'rt2', expires_in: 7_776_000, created_at: 0 },
+      },
+      { match: 'api.trakt.tv', reply: {} },
+    ])
+
+    await requestDeviceCode({ clientId: 'cid' })
+    await pollDeviceToken({ clientId: 'cid' }, 'dc-1')
+    await refreshOnce({ clientId: 'cid' })
+
+    const cfg = loadConfig({ ...baseEnv })
+    const store: TokenStore = {
+      // 有效期要显著大于 REFRESH_SKEW_MS（1h），否则会走刷新分支、错误不经过 API 请求的包装
+      read: async () => ({ accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 7 * 24 * 3_600_000 }),
+      write: async () => true,
+      markReauthRequired: async () => {},
+    }
+    const locks: LockStore = { acquire: async () => true, release: async () => {} }
+    const client = createTraktClient({ config: cfg, tokens: store, locks, userId: 'u1' })
+    await client.get('/sync/watched/shows')
+
+    expect(mock.log.length).toBeGreaterThanOrEqual(4)
+    for (const call of mock.log) expect(call.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('client 超时重试耗尽后给出可读的错误文案（含超时秒数）', async () => {
+    // 用真实运行时的超时形态拒绝（DOMException TimeoutError，已实测）
+    mock = installMockFetch([
+      {
+        match: 'api.trakt.tv',
+        reply: () => {
+          throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+        },
+      },
+    ])
+    // 只伪造 setTimeout（重试退避用它）—— 快进 5.6s，避免测试真的等
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+
+    const cfg = loadConfig({ ...baseEnv })
+    const store: TokenStore = {
+      // 有效期要显著大于 REFRESH_SKEW_MS（1h），否则会走刷新分支、错误不经过 API 请求的包装
+      read: async () => ({ accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 7 * 24 * 3_600_000 }),
+      write: async () => true,
+      markReauthRequired: async () => {},
+    }
+    const locks: LockStore = { acquire: async () => true, release: async () => {} }
+    const client = createTraktClient({ config: cfg, tokens: store, locks, userId: 'u1' })
+
+    const settled = client.get('/sync/watched/shows').then(
+      () => null,
+      (e: unknown) => e,
+    )
+    await vi.runAllTimersAsync()
+    const err = await settled
+
+    expect(err).toBeInstanceOf(Error)
+    const msg = err instanceof Error ? err.message : String(err)
+    expect(msg).toContain('请求超时')
+    expect(msg).toContain('15s')
   })
 })

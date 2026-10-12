@@ -14,7 +14,7 @@
  */
 
 import type { Config } from '../config.ts'
-import { ensureFreshToken, type LockStore, type StoredTokens, type TokenStore } from './oauth.ts'
+import { ensureFreshToken, REQUEST_TIMEOUT_MS, type LockStore, type StoredTokens, type TokenStore } from './oauth.ts'
 import { traktHeaders } from './headers.ts'
 
 // 出站地址全部走 config.traktApiBase（默认官方地址，可指向本地假 Trakt 做离线验证）
@@ -97,6 +97,8 @@ export function createTraktClient(ctx: TraktContext, tokenCache: TokenCache = ne
             // Trakt 允许用它做请求去重/幂等，保留原始时间戳便于排障
             'trakt-api-request-id': crypto.randomUUID(),
           }),
+          // 给「连接挂起」一个上限：没有它，一次永不响应的请求会拖死整轮 tick
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         })
       } catch (e) {
         // ⚠️ 传输层错误（DNS 解析失败、连接被重置、TLS 握手失败）在这里抛出，
@@ -176,7 +178,16 @@ function sleep(ms: number) {
  * 排障时这两个信息天差地别 —— 前者什么都说明不了。
  */
 function describeNetworkError(e: unknown): string {
-  const err = e as { name?: string; message?: string; cause?: { code?: string; message?: string } }
+  const err = e as {
+    name?: string
+    message?: string
+    cause?: { name?: string; code?: string; message?: string }
+  }
+  // AbortSignal.timeout 的拒绝：给一句人能看懂的话，而不是把 TimeoutError
+  // 埋在 cause 里显示成「fetch failed」（实现不同，有的直接抛、有的包一层 cause）
+  if (err?.name === 'TimeoutError' || err?.cause?.name === 'TimeoutError') {
+    return `请求超时（${REQUEST_TIMEOUT_MS / 1000}s 未响应）`
+  }
   if (err?.cause?.code) return `${err.cause.code}${err.cause.message ? ` ${err.cause.message}` : ''}`
   return err?.cause?.message ?? err?.message ?? String(e)
 }

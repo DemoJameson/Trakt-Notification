@@ -34,6 +34,8 @@ export interface FetchLog {
   method: string
   headers: Record<string, string>
   body?: string
+  /** 请求携带的中断信号（用于断言「出站请求有超时保护」） */
+  signal?: AbortSignal
 }
 
 export interface MockFetch {
@@ -57,7 +59,13 @@ export function installMockFetch(routes: MockRoute[]): MockFetch {
       for (const [k, v] of Object.entries(rawHeaders as Record<string, string>)) headers[k.toLowerCase()] = String(v)
     }
 
-    log.push({ url, method: init?.method ?? 'GET', headers, body: typeof init?.body === 'string' ? init.body : undefined })
+    log.push({
+      url,
+      method: init?.method ?? 'GET',
+      headers,
+      body: typeof init?.body === 'string' ? init.body : undefined,
+      signal: init?.signal ?? undefined,
+    })
 
     for (const route of routes) {
       const hit = typeof route.match === 'string' ? url.includes(route.match) : route.match.test(url)

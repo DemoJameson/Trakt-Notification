@@ -41,6 +41,16 @@ import { traktHeaders } from './headers.ts'
 /** 默认官方地址；可被 creds.apiBase 覆盖，用于离线验证 */
 const DEFAULT_API = 'https://api.trakt.tv'
 
+/**
+ * Trakt 出站请求的超时上限。
+ *
+ * 为什么必须有：这些请求以前没有超时 —— 连接挂起（TCP 建连后对端不响应）时
+ * fetch 会永远 pending，整轮 tick 跟着卡死，直到平台把实例杀掉；残留的 tick 锁
+ * 再挡住后面几分钟的调度（2026-10-12 线上真实发生过 4.5 小时的停摆）。
+ * 15s 对 Trakt 的正常响应（秒级）留足余量，只给「挂起」设一个上限。
+ */
+export const REQUEST_TIMEOUT_MS = 15_000
+
 /** 解析出发地址：没传就用官方地址 */
 function baseOf(creds: TraktCredentials): string {
   return (creds.apiBase ?? DEFAULT_API).replace(/\/+$/, '')
@@ -135,6 +145,7 @@ export async function requestDeviceCode(creds: TraktCredentials): Promise<Device
     method: 'POST',
     headers: traktHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ client_id: creds.clientId }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`device/code 失败: ${res.status} ${await res.text()}`)
   return (await res.json()) as DeviceCodeResponse
@@ -176,6 +187,7 @@ export async function pollDeviceToken(
       // 只有 code + client_id —— 官方参数表就是这个形状（见文件头）
       { code: deviceCode, client_id: creds.clientId },
     ),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
 
   if (res.status === 200) {
@@ -274,6 +286,7 @@ export async function ensureFreshToken(
         client_id: creds.clientId,
         redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
       }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
 
     if (res.status === 400) {

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppBindings } from '../index.ts'
 import { readJson } from '../http.ts'
-import { buildActivationUrl, pollDeviceToken, requestDeviceCode } from '../trakt/oauth.ts'
+import { buildActivationUrl, pollDeviceToken, REQUEST_TIMEOUT_MS, requestDeviceCode } from '../trakt/oauth.ts'
 import { traktHeaders } from '../trakt/headers.ts'
 import { RebindBlockedError, tokenStatus, type TraktIdentity } from '../db/repos/users.ts'
 import { requireAdminCredential, resolveAuth } from '../middleware/cron-auth.ts'
@@ -431,6 +431,8 @@ async function fetchProfile(
       'trakt-api-key': clientId,
       Authorization: `Bearer ${accessToken}`,
     }),
+    // 与 oauth.ts 同一上限：连接挂起时不能无限等（否则授权流程会卡到平台超时）
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`授权成功但读取用户资料失败（HTTP ${res.status}）`)
 
