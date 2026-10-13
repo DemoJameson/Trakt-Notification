@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppBindings } from '../index.ts'
 import { readJson } from '../http.ts'
-import { buildActivationUrl, pollDeviceToken, REQUEST_TIMEOUT_MS, requestDeviceCode } from '../trakt/oauth.ts'
+import { buildActivationUrl, describeTimeout, pollDeviceToken, REQUEST_TIMEOUT_MS, requestDeviceCode } from '../trakt/oauth.ts'
 import { traktHeaders } from '../trakt/headers.ts'
 import { RebindBlockedError, tokenStatus, type TraktIdentity } from '../db/repos/users.ts'
 import { requireAdminCredential, resolveAuth } from '../middleware/cron-auth.ts'
@@ -436,9 +436,13 @@ async function fetchProfile(
   })
   if (!res.ok) throw new Error(`授权成功但读取用户资料失败（HTTP ${res.status}）`)
 
-  const json = (await res.json()) as {
-    username?: string
-    ids?: { slug?: string }
+  // ⚠️ AbortSignal.timeout 也覆盖读 body：对端返回响应头之后才挂起时，中断落在这里。
+  //    不包的话冒出去的是原始 DOMException（英文），日志里看不出是超时。
+  let json: { username?: string; ids?: { slug?: string } }
+  try {
+    json = (await res.json()) as { username?: string; ids?: { slug?: string } }
+  } catch (e) {
+    throw new Error(`授权成功但读取用户资料失败：${describeTimeout(e) ?? ((e as Error)?.message || String(e))}`)
   }
 
   // ⚠️ 身份**只能**取 `ids.slug`。Trakt 的 user 对象现在只有它

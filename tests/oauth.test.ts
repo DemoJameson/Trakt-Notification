@@ -385,6 +385,20 @@ describe('expiresAt 的兜底：缺 expires_in 也不能是 NaN', () => {
 /* ------------------------------------------------------------------ */
 
 describe('出站请求超时保护', () => {
+  /**
+   * 模拟「响应头已到、读 body 时才被超时中断」：真实运行时抛的是
+   * DOMException(TimeoutError)（已实测），这里用会报错的 ReadableStream 复刻同一形状。
+   */
+  const interruptedBody = () =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          c.error(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+
   it('🔴 请求挂起时按超时失败（没有信号会永远等下去）', async () => {
     // 生产值 15s 对测试太慢，替换成 40ms —— 测的是「信号真的会中断挂起」，不是具体数值
     const realTimeout = AbortSignal.timeout.bind(AbortSignal)
@@ -472,5 +486,62 @@ describe('出站请求超时保护', () => {
     const msg = err instanceof Error ? err.message : String(err)
     expect(msg).toContain('请求超时')
     expect(msg).toContain('15s')
+  })
+
+  it('🔴 响应体读取阶段被中断 ⇒ 同样退避重试并给可读文案', async () => {
+    // 另一种挂起形态：响应头已经返回，读 body 时才卡住。AbortSignal.timeout
+    // 同样会中断它 —— 不处理的话抛原始 DOMException（英文），且**跳过退避重试**。
+    mock = installMockFetch([{ match: 'api.trakt.tv', reply: () => interruptedBody() }])
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+
+    const cfg = loadConfig({ ...baseEnv })
+    const store: TokenStore = {
+      // 与上一条同款：有效期显著大于 REFRESH_SKEW_MS，避免错误不经过 API 请求的包装
+      read: async () => ({ accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 7 * 24 * 3_600_000 }),
+      write: async () => true,
+      markReauthRequired: async () => {},
+    }
+    const locks: LockStore = { acquire: async () => true, release: async () => {} }
+    const client = createTraktClient({ config: cfg, tokens: store, locks, userId: 'u1' })
+
+    const settled = client.get('/sync/watched/shows').then(
+      () => null,
+      (e: unknown) => e,
+    )
+    await vi.runAllTimersAsync()
+    const err = await settled
+
+    const msg = err instanceof Error ? err.message : String(err)
+    expect(msg).toContain('请求超时')
+    expect(msg).toContain('15s')
+    // MAX_RETRIES(3) + 1：读取阶段的失败必须走完整条重试，而不是一次就放弃
+    expect(mock.traktCalls()).toHaveLength(4)
+  })
+
+  it('device/code 与 device/token 的响应体读取中断 ⇒ 可读文案，而不是英文 DOMException', async () => {
+    mock = installMockFetch([
+      { match: '/oauth/device/code', reply: () => interruptedBody() },
+      { match: '/oauth/device/token', reply: () => interruptedBody() },
+    ])
+    await expect(requestDeviceCode({ clientId: 'cid' })).rejects.toThrow('请求超时（15s 未响应）')
+    await expect(pollDeviceToken({ clientId: 'cid' }, 'dc')).rejects.toThrow('请求超时（15s 未响应）')
+  })
+
+  it('refresh 的响应体读取中断 ⇒ 可读文案，且不误标 reauthRequired', async () => {
+    mock = installMockFetch([{ match: '/oauth/token', reply: () => interruptedBody() }])
+    const expired: StoredTokens = { accessToken: 'old', refreshToken: 'rt-old', expiresAt: Date.now() - 1000 }
+    let marked = false
+    const store: TokenStore = {
+      read: async () => expired,
+      write: async () => true,
+      markReauthRequired: async () => {
+        marked = true
+      },
+    }
+    const locks: LockStore = { acquire: async () => true, release: async () => {} }
+
+    await expect(ensureFreshToken('u1', { clientId: 'cid' }, store, locks)).rejects.toThrow('请求超时（15s 未响应）')
+    // 读 body 被中断 ≠ refresh_token 失效：不该把用户踢去重新授权
+    expect(marked).toBe(false)
   })
 })

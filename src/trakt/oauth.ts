@@ -51,6 +51,42 @@ const DEFAULT_API = 'https://api.trakt.tv'
  */
 export const REQUEST_TIMEOUT_MS = 15_000
 
+/**
+ * 超时中断（`AbortSignal.timeout`）的可读文案；不是超时返回 undefined。
+ *
+ * ⚠️ 信号覆盖的不只是 fetch() 本身 —— **读 body 也在信号之下**：对端返回
+ * 响应头之后才挂起时，中断落在 res.text()/res.json() 上（实测抛 DOMException，
+ * name=TimeoutError、英文文案）。识别逻辑只写这一份：client.ts 的
+ * describeNetworkError 也用它，各调用点不再各判一次。
+ */
+export function describeTimeout(e: unknown): string | undefined {
+  const err = e as { name?: string; cause?: { name?: string } }
+  if (err?.name === 'TimeoutError' || err?.cause?.name === 'TimeoutError') {
+    return `请求超时（${REQUEST_TIMEOUT_MS / 1000}s 未响应）`
+  }
+  return undefined
+}
+
+/**
+ * 读响应体；把「读取阶段被中断」转成可读错误（见 describeTimeout 的说明）。
+ *
+ * 这些 fetch 都挂了 AbortSignal.timeout，而信号也管着读 body —— 不包的话
+ * 日志/界面上冒出来的是一句英文 "The operation was aborted due to timeout"，
+ * 既看不出是超时，也不知道卡在哪一步。
+ */
+async function readBodyText(res: Response, label: string): Promise<string> {
+  try {
+    return await res.text()
+  } catch (e) {
+    throw new Error(`${label}：${describeTimeout(e) ?? ((e as Error)?.message || String(e))}`)
+  }
+}
+
+/** readBodyText 的 JSON 版（解析失败仍按原样抛 SyntaxError） */
+async function readBodyJson<T>(res: Response, label: string): Promise<T> {
+  return JSON.parse(await readBodyText(res, label)) as T
+}
+
 /** 解析出发地址：没传就用官方地址 */
 function baseOf(creds: TraktCredentials): string {
   return (creds.apiBase ?? DEFAULT_API).replace(/\/+$/, '')
@@ -147,8 +183,9 @@ export async function requestDeviceCode(creds: TraktCredentials): Promise<Device
     body: JSON.stringify({ client_id: creds.clientId }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
-  if (!res.ok) throw new Error(`device/code 失败: ${res.status} ${await res.text()}`)
-  return (await res.json()) as DeviceCodeResponse
+  // 错误分支的 body 读不出来时用空串兜底：别让"读报错响应"盖掉真正的 HTTP 失败
+  if (!res.ok) throw new Error(`device/code 失败: ${res.status} ${await res.text().catch(() => '')}`)
+  return await readBodyJson<DeviceCodeResponse>(res, 'device/code 响应读取失败')
 }
 
 /**
@@ -191,12 +228,12 @@ export async function pollDeviceToken(
   })
 
   if (res.status === 200) {
-    const json = (await res.json()) as {
+    const json = await readBodyJson<{
       access_token: string
       refresh_token: string
       expires_in?: number
       created_at?: number
-    }
+    }>(res, 'device/token 响应读取失败')
     // 🔴 `expires_in` **必须兜底**，不能当成必有：Trakt 偶尔不返回它
     //   （token 已存在、或响应被中间层裁掉）。而
     //   `undefined * 1000` = NaN ⇒ 一路传到 libSQL 会抛
@@ -219,7 +256,7 @@ export async function pollDeviceToken(
     }
   }
 
-  const body = await res.text()
+  const body = await readBodyText(res, 'device/token 响应读取失败')
   switch (res.status) {
     case 400:
       return { status: 'pending' }
@@ -295,7 +332,7 @@ export async function ensureFreshToken(
       // 用户会拿到 invalid_grant + session not found，**重新授权一次**即可
       // （之后签发的就正常了）。所以这里标记 reauthRequired 是正确反应，
       // 不要试图重试 —— 重试只会一直 400。
-      await store.markReauthRequired(userId, await res.text())
+      await store.markReauthRequired(userId, await readBodyText(res, 'refresh 响应读取失败'))
       throw new Error('REFRESH_INVALID_GRANT')
     }
     if (!res.ok) {
@@ -303,12 +340,12 @@ export async function ensureFreshToken(
       throw new Error(`REFRESH_FAILED_${res.status}`)
     }
 
-    const json = (await res.json()) as {
+    const json = await readBodyJson<{
       access_token: string
       refresh_token: string
       expires_in?: number
       created_at?: number
-    }
+    }>(res, 'refresh 响应读取失败')
     const next: StoredTokens = {
       accessToken: json.access_token,
       refreshToken: json.refresh_token,

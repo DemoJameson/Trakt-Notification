@@ -33,7 +33,7 @@ export default {
   /**
    * Cron Trigger 回调。
    *
-   * wrangler.toml 里配的 `*\/1 * * * *` 会走到这里。
+   * wrangler.toml 里配的 `*\/5 * * * *` 会走到这里。
    * 手动触发本地测试：`curl http://localhost:8787/__scheduled`
    */
   async scheduled(controller: ScheduledController, env: WorkerEnv, ctx: ExecutionContext): Promise<void> {

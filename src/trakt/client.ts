@@ -14,7 +14,7 @@
  */
 
 import type { Config } from '../config.ts'
-import { ensureFreshToken, REQUEST_TIMEOUT_MS, type LockStore, type StoredTokens, type TokenStore } from './oauth.ts'
+import { describeTimeout, ensureFreshToken, REQUEST_TIMEOUT_MS, type LockStore, type StoredTokens, type TokenStore } from './oauth.ts'
 import { traktHeaders } from './headers.ts'
 
 // 出站地址全部走 config.traktApiBase（默认官方地址，可指向本地假 Trakt 做离线验证）
@@ -117,7 +117,21 @@ export function createTraktClient(ctx: TraktContext, tokenCache: TokenCache = ne
       if (res.ok) {
         // 204 / 空响应（比如 /sync/watched/shows 在没有任何观看记录时）
         if (res.status === 204) return [] as unknown as T
-        const text = await res.text()
+        // ⚠️ 响应体读取也要包 try：AbortSignal.timeout 覆盖的不只是 fetch() 本身，
+        //    **读 body** 同样在信号之下。对端返回响应头之后才挂起时，中断落在这里 ——
+        //    不包的话抛的是原始 DOMException（英文），既绕过「请求超时」的文案，
+        //    也跳过下面的退避重试（与上面 fetch 的 catch 同理）。
+        let text: string
+        try {
+          text = await res.text()
+        } catch (e) {
+          lastError = new TraktError(0, path, `网络错误（响应体读取失败）：${describeNetworkError(e)}`)
+          if (attempt < MAX_RETRIES) {
+            await sleep(BASE_BACKOFF_MS * 2 ** attempt)
+            continue
+          }
+          throw lastError
+        }
         if (!text) return [] as unknown as T
         return JSON.parse(text) as T
       }
@@ -184,10 +198,10 @@ function describeNetworkError(e: unknown): string {
     cause?: { name?: string; code?: string; message?: string }
   }
   // AbortSignal.timeout 的拒绝：给一句人能看懂的话，而不是把 TimeoutError
-  // 埋在 cause 里显示成「fetch failed」（实现不同，有的直接抛、有的包一层 cause）
-  if (err?.name === 'TimeoutError' || err?.cause?.name === 'TimeoutError') {
-    return `请求超时（${REQUEST_TIMEOUT_MS / 1000}s 未响应）`
-  }
+  // 埋在 cause 里显示成「fetch failed」（实现不同，有的直接抛、有的包一层 cause）。
+  // 识别逻辑在 oauth.ts 的 describeTimeout —— 响应体读取阶段的中断也走这里。
+  const timeout = describeTimeout(e)
+  if (timeout) return timeout
   if (err?.cause?.code) return `${err.cause.code}${err.cause.message ? ` ${err.cause.message}` : ''}`
   return err?.cause?.message ?? err?.message ?? String(e)
 }
