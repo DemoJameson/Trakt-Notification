@@ -16,12 +16,13 @@ import {
   resolveImage,
   resolveUrl,
   unknownLinkFields,
+  normalizeLinkTemplate,
   LINK_FIELD_NAMES,
   LINK_PRESETS,
   LINK_CUSTOM,
   type EnrichContext,
 } from '../src/channels/enrich.ts'
-import { CHANNELS, listChannelMeta, getChannel } from '../src/channels/registry.ts'
+import { CHANNELS, listChannelMeta, getChannel, normalizeConfig } from '../src/channels/registry.ts'
 
 const CTX: EnrichContext = {
   poster: 'https://media.trakt.tv/p.webp',
@@ -78,16 +79,47 @@ describe('跳转链接模板', () => {
     expect(resolveUrl({}, CTX)).toBe(CTX.traktUrl)
   })
 
-  it('Forward：type + tmdbId', () => {
-    expect(resolveUrl({ urlTemplate: 'https://fwds.cc/tmdb?type={type}&id={tmdbId}' }, CTX)).toBe(
-      'https://fwds.cc/tmdb?type=tv&id=95480',
+  it('Forward：App scheme + type + tmdbId', () => {
+    expect(resolveUrl({ urlTemplate: 'forward://tmdb?type={type}&id={tmdbId}' }, CTX)).toBe(
+      'forward://tmdb?type=tv&id=95480',
     )
   })
 
   it('Rex：同上', () => {
-    expect(resolveUrl({ urlTemplate: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}' }, CTX)).toBe(
-      'https://rexnow.tv/tmdb?type=tv&id=95480',
+    expect(resolveUrl({ urlTemplate: 'rex://tmdb?type={type}&id={tmdbId}' }, CTX)).toBe(
+      'rex://tmdb?type=tv&id=95480',
     )
+  })
+
+  it('🔴 候选项里的 Rex / Forward 用 App scheme（不是网页地址）', () => {
+    // 2026-10-14 用户要求：网页版在 iOS 上要先起浏览器再跳一次
+    const value = (label: string) => LINK_PRESETS.find((p) => p.label === label)?.value
+    expect(value('Forward')).toBe('forward://tmdb?type={type}&id={tmdbId}')
+    expect(value('Rex')).toBe('rex://tmdb?type={type}&id={tmdbId}')
+  })
+
+  it('🔴 历史预设值（网页地址）会归一化成 App scheme', () => {
+    // 库里存着旧值的渠道靠它继续生效（挂在读配置的路：registry.normalizeConfig）
+    expect(normalizeLinkTemplate('https://fwds.cc/tmdb?type={type}&id={tmdbId}')).toBe(
+      'forward://tmdb?type={type}&id={tmdbId}',
+    )
+    expect(normalizeLinkTemplate('https://rexnow.tv/tmdb?type={type}&id={tmdbId}')).toBe(
+      'rex://tmdb?type={type}&id={tmdbId}',
+    )
+    // 自定义模板 / 空值原样保留
+    expect(normalizeLinkTemplate('https://my.test/{traktId}')).toBe('https://my.test/{traktId}')
+    expect(normalizeLinkTemplate(undefined)).toBe('')
+  })
+
+  it('registry.normalizeConfig：只归一化 urlTemplate，别的键不动、原对象不被改', () => {
+    const cfg = { urlTemplate: 'https://fwds.cc/tmdb?type={type}&id={tmdbId}', imageMode: 'poster' }
+    const out = normalizeConfig('bark', cfg)
+    expect(out.urlTemplate).toBe('forward://tmdb?type={type}&id={tmdbId}')
+    expect(out.imageMode).toBe('poster')
+    // 读路径上多处共享引用，绝不能就地改
+    expect(cfg.urlTemplate).toBe('https://fwds.cc/tmdb?type={type}&id={tmdbId}')
+    // 未知渠道类型原样返回
+    expect(normalizeConfig('nope', cfg)).toBe(cfg)
   })
 
   it('Infuse：整部/整季/单集/电影四种形态', () => {
@@ -191,10 +223,10 @@ describe('跳转链接模板', () => {
     // 界面上显示 Forward、实际跳到别处，**用户完全看不出来**。
     expect(
       resolveUrl(
-        { urlTemplate: 'https://fwds.cc/tmdb?type={type}&id={tmdbId}', urlTemplateCustom: 'https://my.test/{traktId}' },
+        { urlTemplate: 'forward://tmdb?type={type}&id={tmdbId}', urlTemplateCustom: 'https://my.test/{traktId}' },
         CTX,
       ),
-    ).toBe('https://fwds.cc/tmdb?type=tv&id=95480')
+    ).toBe('forward://tmdb?type=tv&id=95480')
   })
 
   it('下拉为空但填过自定义 ⇒ 当没配', () => {

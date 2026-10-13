@@ -1,6 +1,6 @@
 import type { Db } from '../types.ts'
 import { decryptJson, encryptJson, maskConfig } from '../../crypto.ts'
-import { getChannel, withDefaults } from '../../channels/registry.ts'
+import { getChannel, normalizeConfig, withDefaults } from '../../channels/registry.ts'
 import { LINK_CUSTOM, unknownLinkFields } from '../../channels/enrich.ts'
 
 /**
@@ -49,7 +49,9 @@ export function channelRepo(db: Db, encryptionKey: string) {
     r: ChannelRow,
   ): Promise<{ ok: true; channel: Channel } | { ok: false; error: string }> => {
     try {
-      const config = await decryptJson<Record<string, unknown>>(r.config_enc, encryptionKey)
+      // 历史预设值归一化（见 registry.normalizeConfig）——
+      // 推送 / 预览 / 界面三处读到的都是同一份"当前值"
+      const config = normalizeConfig(r.type, await decryptJson<Record<string, unknown>>(r.config_enc, encryptionKey))
       return {
         ok: true,
         channel: {

@@ -10,7 +10,7 @@ import { serverChanChannel } from './serverchan.ts'
 import { pushPlusChannel } from './pushplus.ts'
 import { discordChannel } from './discord.ts'
 import { slackChannel } from './slack.ts'
-import { LINK_CUSTOM, LINK_FIELDS, LINK_PRESETS } from './enrich.ts'
+import { LINK_CUSTOM, LINK_FIELDS, LINK_PRESETS, normalizeLinkTemplate } from './enrich.ts'
 
 /**
  * 渠道注册表。
@@ -160,6 +160,22 @@ export function withDefaults(type: string, config: Record<string, unknown>): Rec
     const cur = out[f.name]
     if (cur === undefined || cur === null) out[f.name] = String(f.default)
   }
+  return out
+}
+
+/**
+ * 读渠道配置时的归一化：把历史预设值换成当前值（见 enrich.normalizeLinkTemplate）。
+ *
+ * ⚠️ 必须挂在**读**路径（db/repos/channels.ts 的解密出口），不能只在写路径：
+ *   老配置在用户重新保存之前，推送链路（scheduler → resolveUrl）读到的
+ *   也必须是新值 —— 否则"链接改成 rex:// / forward://"对已有渠道等于没做。
+ *   顺带把界面也拉齐：下拉按 option value 匹配，旧值匹配不上会静默显示成第一项。
+ */
+export function normalizeConfig(type: string, config: Record<string, unknown>): Record<string, unknown> {
+  const def = getChannel(type)
+  if (!def) return config
+  const out: Record<string, unknown> = { ...config }
+  if (out.urlTemplate !== undefined) out.urlTemplate = normalizeLinkTemplate(out.urlTemplate)
   return out
 }
 

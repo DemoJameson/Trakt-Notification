@@ -1088,9 +1088,9 @@ describe('渠道测试推送', () => {
     expect(String(sent[0]!.title)).not.toContain('测试')
   })
 
-  it('跳转链接配置在测试里真的生效（Forward）', async () => {
-    await testPush({ urlTemplate: 'https://fwds.cc/tmdb?type={type}&id={tmdbId}' })
-    expect(sent[0]!.url as string).toBe(`https://fwds.cc/tmdb?type=tv&id=95480`)
+  it('跳转链接配置在测试里真的生效（Forward，App scheme）', async () => {
+    await testPush({ urlTemplate: 'forward://tmdb?type={type}&id={tmdbId}' })
+    expect(sent[0]!.url as string).toBe('forward://tmdb?type=tv&id=95480')
   })
 
   it('Infuse 智能模板在测试里跳到那一集', async () => {

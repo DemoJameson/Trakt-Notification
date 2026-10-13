@@ -3260,12 +3260,33 @@ function channelDocsHtml(meta) {
 }
 
 /**
+ * 带 `showIf` 的字段当前是否**生效**（该显示 / 该列进摘要）。
+ *
+ * 判据要跟控件的**实际值**一致：select 存的是 option 的 value，
+ * 没存过时下拉显示第一项，所以要按 `config → default → options[0]` 依次回退 ——
+ * 漏了任何一级都会判错（"默认是海报"就会被当成"没配"而误显示地址框）。
+ *
+ * ⚠️ 表单（channelFormBodyHtml）与渠道卡摘要（channelSummaryHtml）**共用这一份**：
+ *   摘要那边曾漏了它，于是"切回影片海报后，旧的固定地址还挂在卡上" ——
+ *   界面显示的和实际生效的对不上，用户只会以为自己的配置错了（2026-10-14 报告）。
+ */
+function fieldVisible(meta, config, f) {
+  if (!f.showIf) return true;
+  const dep = ((meta && meta.configFields) || []).find(function (x) { return x.name === f.showIf.field; });
+  let v = config[f.showIf.field];
+  v = v != null ? String(v) : '';
+  if (v === '' && dep && dep.default != null) v = String(dep.default);
+  if (v === '' && dep && dep.options && dep.options.length) v = String(dep.options[0].value);
+  return f.showIf.in.indexOf(v) >= 0;
+}
+
+/**
  * 渠道卡上那行"已配置项"的摘要。
  *
  * 🔴 原来这里是**内部字段名的 dump**：`deviceKey, urlTemplate, serverUrl, group,
  *   iconMode, archive, imageMode` + 右边 `k=v k=v`（2026-10-05 用户要求处理掉）。
  *   问题不是"不好看"而是**用户读不懂**：`deviceKey` 是我们的字段名不是他的；
- *   `urlTemplate=https://rexnow.tv/tmdb?type={type}&id={tmdbId}` 是内部模板；
+ *   `urlTemplate=forward://tmdb?type={type}&id={tmdbId}` 是内部模板；
  *   而 `WNs****gS6U` 这种打码密钥出现在一行里，只会让人怀疑是不是泄露了什么。
  *
  * 改成**用界面自己的标签**（`configFields[].label`，与编辑表单里那份是同一份）
@@ -3274,6 +3295,10 @@ function channelDocsHtml(meta) {
  *
  * ⚠️ 刻意**不列默认值**：那三项（服务地址 / 图标 / 图片）在新建时就填好了，
  *   每次都列出来等于没有信息。
+ *
+ * ⚠️ 带 `showIf` 的字段只在**条件满足**时才列（见 fieldVisible）：
+ *   切回「影片海报」后，旧固定地址仍留在 config 里（表单刻意保留、切回去还能看到），
+ *   但列出来等于说"现在用的就是它"。
  */
 function channelSummaryHtml(c, meta) {
   const fields = (meta && meta.configFields) || [];
@@ -3282,6 +3307,8 @@ function channelSummaryHtml(c, meta) {
   const items = [];
 
   for (const f of fields) {
+    // 不生效的字段不列（见 fieldVisible 的说明）
+    if (!fieldVisible(meta, cfg, f)) continue;
     if (secrets.indexOf(f.name) >= 0) {
       // 密钥只说"配没配"，不说值 —— 打码串摆在界面上只会让人不放心
       if (cfg[f.name]) items.push(f.label);
@@ -3370,16 +3397,8 @@ function channelFormBodyHtml(d) {
 
   const fields = (meta ? meta.configFields : []).filter(function (f) {
     // 条件显示（见 ChannelDefinition.configFields[].showIf）：
-    // 「固定图片地址」这类字段只在对应模式选中时才出现。
-    // ⚠️ 判据要跟控件的**实际值**一致 —— select 存的是 option 的 value，
-    //    没存过时下拉显示第一项，所以要取 default 再回退到首个 option 的值。
-    if (!f.showIf) return true;
-    const cur = d.config[f.showIf.field];
-    const dep = (meta.configFields || []).find(function (x) { return x.name === f.showIf.field; });
-    let v = cur != null ? String(cur) : '';
-    if (v === '' && dep && dep.default != null) v = String(dep.default);
-    if (v === '' && dep && dep.options && dep.options.length) v = String(dep.options[0].value);
-    return f.showIf.in.indexOf(v) >= 0;
+    // 「固定图片地址」这类字段只在对应模式选中时才出现（判据见 fieldVisible）。
+    return fieldVisible(meta, d.config, f);
   }).map(function (f) {
     // 密钥字段不预填默认值：把默认值放进密钥框会被当成"已有值"，反而误导
     const isSecret = (meta && meta.secretFields || []).indexOf(f.name) >= 0;

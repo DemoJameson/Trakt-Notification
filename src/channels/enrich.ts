@@ -92,12 +92,15 @@ export const LINK_PRESETS: Array<{ value: string; label: string; hint?: string }
     hint: '就是影片本身的 Trakt 链接',
   },
   {
-    value: 'https://fwds.cc/tmdb?type={type}&id={tmdbId}',
+    // ⚠️ 用 App 自己的 scheme，**不是**网页地址（`https://fwds.cc/…`）——
+    //   网页版在 iOS 上要先起浏览器再跳一次，通知里点开更慢也更绕。
+    value: 'forward://tmdb?type={type}&id={tmdbId}',
     label: 'Forward',
     hint: 'iOS · 需要先装 Forward 并配置 TMDB 匹配',
   },
   {
-    value: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}',
+    // 同上：`rex://` 直开 App，不走 rexnow.tv 的网页中转
+    value: 'rex://tmdb?type={type}&id={tmdbId}',
     label: 'Rex',
     hint: 'iOS · 剧集用 tv、电影用 movie',
   },
@@ -118,6 +121,33 @@ export const LINK_PRESETS: Array<{ value: string; label: string; hint?: string }
     hint: '用你自己的链接模板，支持占位符',
   },
 ]
+
+/**
+ * 历史预设值 → 当前值。
+ *
+ * 2026-10-14：Rex / Forward 从网页地址（`https://fwds.cc/…` / `https://rexnow.tv/…`）
+ * 改成 App 自己的 scheme。库里已经存着旧值的渠道必须归一化，否则：
+ *   1. 推送还是带旧链接 —— "改成 rex:// / forward://" 等于没生效；
+ *   2. 「点击跳转」下拉按 option value 匹配，旧值不在候选项里会被
+ *      **静默显示成第一项** —— 界面显示的与实际生效的对不上。
+ *
+ * 归一化挂在**读渠道配置**这一条路上（registry.normalizeConfig →
+ * db/repos/channels.ts 的解密出口），所以老配置不用重新保存也立刻生效；
+ * 用户下次保存时自然写成新值。
+ */
+const LEGACY_LINK_TEMPLATES: Record<string, string> = {
+  'https://fwds.cc/tmdb?type={type}&id={tmdbId}': 'forward://tmdb?type={type}&id={tmdbId}',
+  'https://rexnow.tv/tmdb?type={type}&id={tmdbId}': 'rex://tmdb?type={type}&id={tmdbId}',
+}
+
+/**
+ * 把「点击跳转」的值归一化成当前预设（见 LEGACY_LINK_TEMPLATES）。
+ * 不是历史预设的值（自定义模板、空串…）原样返回。
+ */
+export function normalizeLinkTemplate(value: unknown): string {
+  const v = typeof value === 'string' ? value.trim() : ''
+  return LEGACY_LINK_TEMPLATES[v] ?? v
+}
 
 /**
  * 「智能模板」：值不是模板字符串，而是一个由函数按上下文拼出来的链接。

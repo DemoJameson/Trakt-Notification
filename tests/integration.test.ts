@@ -1721,10 +1721,19 @@ describe('渠道的图片与跳转链接', () => {
     expect(sent[0]!.image).toBe('https://x.test/fixed.png')
   })
 
-  it('urlTemplate ⇒ 跳到配置的地址（Forward）', async () => {
+  it('urlTemplate ⇒ 跳到配置的地址（Forward，App scheme）', async () => {
+    await seedChannel({ urlTemplate: 'forward://tmdb?type={type}&id={tmdbId}' })
+    await runTick(h.deps, { now: NOW, skipLock: true })
+    expect(sent[0]!.url).toMatch(/^forward:\/\/tmdb\?type=tv&id=\d+$/)
+  })
+
+  it('🔴 老配置里的网页地址 ⇒ 推送时已归一化成 App scheme（不用重新保存）', async () => {
+    // 库里存的是旧的 https://fwds.cc/…（2026-10-14 之前的预设值），
+    // 读配置时归一化（见 registry.normalizeConfig）—— 否则老渠道的推送
+    // 还会带旧链接，"改为 forward://" 等于没生效。
     await seedChannel({ urlTemplate: 'https://fwds.cc/tmdb?type={type}&id={tmdbId}' })
     await runTick(h.deps, { now: NOW, skipLock: true })
-    expect(sent[0]!.url).toMatch(/^https:\/\/fwds\.cc\/tmdb\?type=tv&id=\d+$/)
+    expect(sent[0]!.url).toMatch(/^forward:\/\/tmdb\?type=tv&id=\d+$/)
   })
 
   it('🔴 加工只影响这个渠道，不影响投递记录里的文字', async () => {
@@ -1760,7 +1769,7 @@ describe('渠道的图片与跳转链接', () => {
     // 继续报警等于训练他忽略所有警告，真问题也就看不见了。
     const w = validateConfig('webhook', {
       url: 'https://hooks.example.com/abc',
-      urlTemplate: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}',
+      urlTemplate: 'rex://tmdb?type={type}&id={tmdbId}',
       urlTemplateCustom: 'https://x.test/{tmdbid}',
     })
     expect(w.some((x) => x.includes('{tmdbid}'))).toBe(false)

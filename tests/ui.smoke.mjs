@@ -1166,7 +1166,7 @@ function testChannelSummaryIsHumanReadable() {
     group: 'Trakt 播出提醒',
     iconMode: 'poster',
     archive: 'true',
-    urlTemplateCustom: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}',
+    urlTemplateCustom: 'https://my.test/{tmdbId}',
   }
   const html = channelSummaryHtml({ type: 'bark', config: cfg }, meta)
 
@@ -1196,6 +1196,27 @@ function testChannelSummaryIsHumanReadable() {
   eq('非默认值会列出来', custom.includes('https://bark.example.com'), true)
   eq('select 显示选项文案而非内部 value', custom.includes('Bark 默认图标'), true)
   eq('select 的内部 value 不出现', custom.includes('iconMode'), false)
+
+  // 🔴 带 showIf 的字段：条件不满足时**不列**（2026-10-14 用户报告）。
+  //   选回「影片海报」后，旧固定地址仍留在 config 里（表单刻意保留它，
+  //   切回「固定图片」时还能看到），但摘要列出来 = 告诉用户"现在用的就是它"。
+  const imgMeta = {
+    type: 'bark', label: 'Bark', secretFields: [],
+    configFields: [
+      {
+        name: 'imageMode', label: '图片', type: 'select', default: 'poster',
+        options: [{ value: 'poster', label: '影片海报' }, { value: 'fixed', label: '固定图片' }],
+      },
+      { name: 'imageUrl', label: '固定图片地址', type: 'url', showIf: { field: 'imageMode', in: ['fixed'] } },
+    ],
+  }
+  const stale = channelSummaryHtml(
+    { type: 'bark', config: { imageMode: 'poster', imageUrl: 'https://x.test/old.png' } }, imgMeta)
+  eq('切回「影片海报」后旧固定地址不再列出', stale.includes('固定图片地址'), false)
+  eq('（旧地址本身也不出现）', stale.includes('old.png'), false)
+  const inUse = channelSummaryHtml(
+    { type: 'bark', config: { imageMode: 'fixed', imageUrl: 'https://x.test/f.png' } }, imgMeta)
+  eq('选「固定图片」时正常列出', inUse.includes('固定图片地址'), true)
 
   // 只有密钥 ⇒ 只留一个"设备 Key" chip（回答"我到底配了没有"）
   eq('只有密钥时仍显示那一个 chip',
@@ -1450,7 +1471,7 @@ function testConditionalFields() {
           name: 'urlTemplate', label: '点击跳转', type: 'select',
           options: [
             { value: '', label: 'Trakt 页面' },
-            { value: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}', label: 'Rex' },
+            { value: 'rex://tmdb?type={type}&id={tmdbId}', label: 'Rex' },
             { value: 'custom', label: '自定义' },
           ],
         },
@@ -1467,7 +1488,7 @@ function testConditionalFields() {
     S.editingChannel = { id: '', type: 'bark', name: 'x', config: {} }
     eq('默认（Trakt）不显示自定义链接框', hasCustom(), false)
 
-    S.editingChannel = { id: '', type: 'bark', name: 'x', config: { urlTemplate: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}' } }
+    S.editingChannel = { id: '', type: 'bark', name: 'x', config: { urlTemplate: 'rex://tmdb?type={type}&id={tmdbId}' } }
     eq('选 Rex 不显示自定义链接框', hasCustom(), false)
 
     S.editingChannel = { id: '', type: 'bark', name: 'x', config: { urlTemplate: 'custom' } }
@@ -1478,7 +1499,7 @@ function testConditionalFields() {
     //   会对不上，而用户没有任何地方能改它。
     S.editingChannel = {
       id: 'c1', type: 'bark', name: 'x',
-      config: { urlTemplate: 'https://rexnow.tv/tmdb?type={type}&id={tmdbId}', urlTemplateCustom: 'https://my.test/{traktId}' },
+      config: { urlTemplate: 'rex://tmdb?type={type}&id={tmdbId}', urlTemplateCustom: 'https://my.test/{traktId}' },
     }
     const html = channelFormHtml()
     eq('下拉停在 Rex ⇒ 不显示自定义链接框', hasCustom(), false)
