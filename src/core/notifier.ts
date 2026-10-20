@@ -12,6 +12,7 @@ import {
   describeOffset,
   finaleTag,
   formatInZone,
+  formatPreviewInZone,
   msg,
   type Locale,
 } from './messages.ts'
@@ -29,6 +30,37 @@ export interface RenderContext {
  * 优先级：完结集调高一档 —— 一条"全剧完结"比一条常规集值得被打断。
  */
 export function renderItem(p: PlannedNotification, ctx: RenderContext): NotifyMessage {
+  return renderItemWithAirTime(p, ctx)
+}
+
+/** 以指定时刻为参照渲染真实发送文案；供“立即测试推送”等同步发送路径使用。 */
+export function renderItemAt(p: PlannedNotification, ctx: RenderContext, ref: Date): NotifyMessage {
+  return renderItemWithAirTime(
+    p,
+    ctx,
+    formatInZone(p.item.firstAired, ctx.timezone, ctx.locale, ref),
+  )
+}
+
+/**
+ * 推送预览专用正文：日期行相对**预览时刻**渲染。
+ *
+ * 真实通知仍走 renderItem()，在发送时使用 notifyAt/真实发送时刻；这里只改变
+ * 预览卡片里用户看到的日期措辞，避免未来条目在预览里全写成“今天”。
+ */
+export function renderPreviewItem(p: PlannedNotification, ctx: RenderContext, ref: Date): NotifyMessage {
+  return renderItemWithAirTime(
+    p,
+    ctx,
+    formatPreviewInZone(p.item.firstAired, ctx.timezone, ctx.locale, ref),
+  )
+}
+
+function renderItemWithAirTime(
+  p: PlannedNotification,
+  ctx: RenderContext,
+  airTime?: string,
+): NotifyMessage {
   const it = p.item
   // 电影没有"季/集"的概念，标签固定是【电影】；剧集才走首播/完结判定
   const tag = it.mediaType === 'movie'
@@ -42,7 +74,7 @@ export function renderItem(p: PlannedNotification, ctx: RenderContext): NotifyMe
 
   const isFinale = p.finaleLevel === 'series' || p.finaleLevel === 'season'
   const title = buildTitle(it, tag, ctx.locale)
-  const body = buildBody(p, ctx)
+  const body = buildBody(p, ctx, airTime)
 
   return {
     title,
@@ -147,7 +179,7 @@ function buildTitle(it: CalendarItem, tag: string, locale: Locale): string {
   return locale === 'en' ? `${base}${tag ? ` ${tag}` : ''}` : `${tag}${base}`
 }
 
-function buildBody(p: PlannedNotification, ctx: RenderContext): string {
+function buildBody(p: PlannedNotification, ctx: RenderContext, airTime?: string): string {
   const it = p.item
   const lines: string[] = []
 
@@ -164,12 +196,11 @@ function buildBody(p: PlannedNotification, ctx: RenderContext): string {
    * 为什么可以去掉：上一行要么是电影类型、要么是单集标题（"Episode 5"），
    * 读者已经知道这一行在讲什么；再顶一个"播出："只是把同一句话说两遍。
    *
-   * ⚠️ 改这里而不是只改前端：预览页显示的 `body` 就是**将要发出去的正文**
-   *   （`deliveries.body` 落库也是这份）。只在前端剥掉前缀 ⇒ 预览干净、
-   *   用户手机收到的通知却带着"播出："，预览与实际不一致。
-   *   与其那样不如源头去掉（也省掉 `airAt` 这个词条与四语翻译）。
+   * ⚠️ 改这里而不是只改前端：真实推送与预览共用这段正文结构，只有日期行
+   *   会因预览专用入口换成“昨天/今天/明天”或“N 天前/后”。若只在前端
+   *   剥掉前缀，用户手机收到的通知仍会带着“播出：”，预览与实际又会对不上。
    */
-  lines.push(airLine(p, ctx))
+  lines.push(airTime ?? airLine(p, ctx))
 
   // 只有真的提前/延后了才说，否则是噪音
   if (p.appliedOffset !== 0) lines.push(describeOffset(ctx.locale, p.appliedOffset))

@@ -1239,6 +1239,57 @@ describe('预览的前视窗口', () => {
     expect(Number(n!.n)).toBe(0)
   })
 
+  it('预览正文以预览时刻为参照：昨天/今天/明天，更远显示 N 天后', async () => {
+    const PREVIOUS_EPISODE = {
+      showId: 123,
+      showTitle: '幕府将军',
+      slug: 'shogun',
+      season: 1,
+      number: 6,
+      episodeTitle: '前一天的一集',
+      firstAired: '2026-09-30T00:30:00.000Z',
+    }
+    const TODAY_EPISODE = {
+      showId: 123,
+      showTitle: '幕府将军',
+      slug: 'shogun',
+      season: 1,
+      number: 7,
+      episodeTitle: '今天的一集',
+      firstAired: '2026-10-01T00:30:00.000Z',
+    }
+    const TOMORROW_EPISODE = {
+      showId: 123,
+      showTitle: '幕府将军',
+      slug: 'shogun',
+      season: 1,
+      number: 8,
+      episodeTitle: '明天的一集',
+      firstAired: '2026-10-02T00:30:00.000Z',
+    }
+
+    mock = installMockFetch(
+      standardRoutes(calendarResponse([
+        PREVIOUS_EPISODE,
+        TODAY_EPISODE,
+        TOMORROW_EPISODE,
+        FUTURE_EPISODE,
+      ])),
+    )
+    await h.deps.rules.insert(h.userId, {
+      name: 'r', content: { episodes: { all: true } }, offsetMinutes: 0, mode: 'realtime',
+    })
+
+    const r = await runTick(h.deps, { now: NOW, dryRun: true, skipLock: true })
+    const byKey = new Map((r.dryRunPlan ?? []).map((e) => [e.itemKey, e]))
+
+    expect(byKey.get('episodic:123:S1E6')?.body).toContain('昨天 08:30')
+    expect(byKey.get('episodic:123:S1E7')?.body).toContain('今天 08:30')
+    expect(byKey.get('episodic:123:S1E8')?.body).toContain('明天 08:30')
+    expect(byKey.get('episodic:123:S1E9')?.body).toContain('4 天后 08:30')
+    expect(byKey.get('episodic:123:S1E9')?.body).not.toContain('今天 08:30')
+  })
+
   it('前视窗口可以收紧：窗口内不到 4 天就不出现未来条目', async () => {
     mock = installMockFetch(standardRoutes(calendarResponse([FINALE_EPISODE, FUTURE_EPISODE])))
     await seedRuleAndChannel()

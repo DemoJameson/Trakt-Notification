@@ -138,15 +138,17 @@ channelRoutes.post('/test', async (c) => {
   // 点了也不知道跳去哪，于是"图片策略"和"跳转链接"这两个配置**无法验证**，
   // 而它们恰恰是最容易配错的两项（填错的表现是静默失效，不是报错）。
   //
-  // 复用 dryRun 而不是重新拉日历：预览那一屏已经算过一次，条目是同一批，
-  // 顺带验证了"预览里看到的"与"推送里发出的"确实一致。
+  // 复用 dryRun 而不是重新拉日历，但必须显式使用 `message` 日期模式：
+  // 预览正文的远期相对日期只服务预览，测试推送要验证的是真实发送文案。
   const cfg = config ?? {}
   let message: NotifyMessage
   let sample: 'real' | 'fallback' = 'real'
   try {
+    const now = new Date()
     const preview = await runTick(ctx.deps, {
-      now: new Date(),
+      now,
       dryRun: true,
+      dryRunDateMode: 'message',
       onlyUserId: userId,
       skipLock: true,
       previewHorizonMinutes: 7 * 24 * 60,

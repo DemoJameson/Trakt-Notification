@@ -1086,6 +1086,10 @@ describe('渠道测试推送', () => {
     expect(String(sent[0]!.title)).toContain('流人')
     // 占位文案长这样；出现了就说明退回 fallback 了
     expect(String(sent[0]!.title)).not.toContain('测试')
+    // 测试推送必须走真实发送文案，不能把预览专用的远期相对日期发出去
+    const sentBody = String(sent[0]!.body)
+    expect(sentBody).not.toMatch(/\d+ 天前|\d+ 天后/)
+    expect(sentBody).toMatch(/(今天|昨天) \d{2}:\d{2}/)
   })
 
   it('跳转链接配置在测试里真的生效（Forward，App scheme）', async () => {

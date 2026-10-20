@@ -53,8 +53,10 @@ previewRoutes.post('/', async (c) => {
     Math.round(ctx.config.tickLookbackMinutes / 1440) || DEFAULT_LOOKBACK_DAYS,
   )
 
+  // 预览正文和 simulatedAt 必须共用同一个参照时刻，避免跨零点时二者落在不同日期。
+  const now = new Date()
   const result = await runTick(ctx.deps, {
-    now: new Date(),
+    now,
     dryRun: true,
     onlyUserId: userId,
     skipLock: true,
@@ -67,7 +69,7 @@ previewRoutes.post('/', async (c) => {
 
   return c.json({
     dryRun: true,
-    simulatedAt: new Date().toISOString(),
+    simulatedAt: now.toISOString(),
     horizonDays,
     lookbackDays,
     /** 每一侧的天数上限（服务端兜底；界面不设这个限制） */

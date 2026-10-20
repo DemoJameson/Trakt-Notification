@@ -44,7 +44,15 @@ import { groupDigests, plan, DEFAULT_HORIZON_MINUTES, type CalendarItem, type No
 import { resolveImage, resolveUrl, type EnrichContext } from '../channels/enrich.ts'
 import type { FinaleLevel } from './finale.ts'
 import { requiredEndpoints, type TraktCalendarEndpoint } from './selection.ts'
-import { airLine, digestLineTime, renderDigest, renderItem, type RenderContext } from './notifier.ts'
+import {
+  airLine,
+  digestLineTime,
+  renderDigest,
+  renderItem,
+  renderItemAt,
+  renderPreviewItem,
+  type RenderContext,
+} from './notifier.ts'
 import { formatInZone, resolveLocale, type Locale } from './messages.ts'
 import { getChannel } from '../channels/registry.ts'
 import type { NotifyMessage, Priority, SendResult } from '../channels/types.ts'
@@ -86,6 +94,11 @@ export interface TickOptions {
    * 同样只影响 dryRun（真实 tick 的回看是投递可靠性的一部分，不能由界面改）。
    */
   previewLookbackMinutes?: number
+  /**
+   * 干跑正文的日期模式。默认 `preview`：相对本次预览时刻显示昨天/今天/明天，
+   * 更远显示 N 天前/后。渠道测试推送应传 `message`，使用与真实发送相同的日期文案和当前时刻。
+   */
+  dryRunDateMode?: 'preview' | 'message'
 }
 
 export interface DryRunEntry {
@@ -273,7 +286,15 @@ async function tickBody(
     // 预览要的就是"当下这一刻会推什么"，所以照旧跑完整计算，只是不落库、不发送。
     for (const user of users) {
       try {
-        await dryRunForUser(deps, user, now, horizonMinutes, lookbackMinutes, result)
+        await dryRunForUser(
+          deps,
+          user,
+          now,
+          horizonMinutes,
+          lookbackMinutes,
+          opts.dryRunDateMode ?? 'preview',
+          result,
+        )
       } catch (e) {
         result.errors.push({ userId: user.id, message: (e as Error).message })
       }
@@ -607,6 +628,7 @@ async function dryRunForUser(
   now: Date,
   horizonMinutes: number,
   lookbackMinutes: number,
+  dateMode: 'preview' | 'message',
   result: TickResult,
 ): Promise<void> {
   const c = await computeForUser(deps, user, now, true, horizonMinutes, lookbackMinutes, result)
@@ -627,7 +649,11 @@ async function dryRunForUser(
 
   const channels = await deps.channels.listEnabled(user.id)
   for (const p of c.planned) {
-    pushDryRun(result, p, renderItem(p, renderCtx(user, nameOf(c.rules, p.ruleId))), channels.length)
+    const ctx = renderCtx(user, nameOf(c.rules, p.ruleId))
+    const message = dateMode === 'message'
+      ? renderItemAt(p, ctx, now)
+      : renderPreviewItem(p, ctx, now)
+    pushDryRun(result, p, message, channels.length)
   }
 }
 

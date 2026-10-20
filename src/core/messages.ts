@@ -52,6 +52,8 @@ const MESSAGES: Record<Locale, Dict> = {
     'day.tomorrow': '明天',
     'day.dayAfterTomorrow': '后天',
     'day.yesterday': '昨天',
+    'preview.day.daysAgo': '{{n}} 天前',
+    'preview.day.inDays': '{{n}} 天后',
     'movie.release.theatrical': '影院上映',
     'movie.release.homeRelease': '影碟发行',
     'test.title': 'Trakt 播出提醒 · 测试通知',
@@ -79,6 +81,8 @@ const MESSAGES: Record<Locale, Dict> = {
     'day.tomorrow': '明天',
     'day.dayAfterTomorrow': '後天',
     'day.yesterday': '昨天',
+    'preview.day.daysAgo': '{{n}} 天前',
+    'preview.day.inDays': '{{n}} 天後',
     'movie.release.theatrical': '院線上映',
     'movie.release.homeRelease': '影碟發行',
     'test.title': 'Trakt 播出提醒 · 測試通知',
@@ -110,6 +114,8 @@ const MESSAGES: Record<Locale, Dict> = {
     'day.tomorrow': '明天',
     'day.dayAfterTomorrow': '後天',
     'day.yesterday': '昨天',
+    'preview.day.daysAgo': '{{n}} 天前',
+    'preview.day.inDays': '{{n}} 天後',
     'movie.release.theatrical': '院線上映',
     'movie.release.homeRelease': '影碟發行',
     'test.title': 'Trakt 播出提醒 · 測試通知',
@@ -137,6 +143,8 @@ const MESSAGES: Record<Locale, Dict> = {
     'day.tomorrow': 'tomorrow',
     'day.dayAfterTomorrow': 'day after tomorrow',
     'day.yesterday': 'yesterday',
+    'preview.day.daysAgo': '{{n}} d ago',
+    'preview.day.inDays': 'in {{n}} d',
     'movie.release.theatrical': 'In cinemas',
     'movie.release.homeRelease': 'Home release',
     'test.title': 'Trakt Airing Alerts · test',
@@ -170,16 +178,15 @@ function localDayNumber(instant: Date, timezone: string): number {
   return Date.UTC(p.year, p.month - 1, p.day) / 86_400_000
 }
 
-/**
- * 按用户时区格式化"日期 + 星期 + 时:分"，临近日期用相对词代替日期。
- *
- * 例：今天 08:30 / 明天 20:00 / 后天 09:00 / 昨天 10:00 / 10月3日 周六 08:30
- *
- * ⚠️ `ref` 是"以哪一天为今天"的参照。推送渲染必须传**发送时刻**，
- *   而不是渲染那一刻的 `new Date()`：计划会提前算好并落库，
- *   跨零点前算、零点后发的那条会写成"明天"。不传时退化为绝对日期。
- */
-export function formatInZone(d: Date, timezone: string, locale: Locale, ref?: Date): string {
+/** 按用户时区格式化日期；`dayKeys` 决定哪些相对日使用哪种文案。 */
+function formatInZoneWithDayKeys(
+  d: Date,
+  timezone: string,
+  locale: Locale,
+  ref: Date | undefined,
+  dayKeys: Readonly<Record<number, string>>,
+  fallbackLabel?: (diff: number, locale: Locale) => string | null,
+): string {
   const tag = LOCALE_TAG[locale]
   const time = new Intl.DateTimeFormat(tag, {
     timeZone: timezone,
@@ -190,18 +197,56 @@ export function formatInZone(d: Date, timezone: string, locale: Locale, ref?: Da
 
   if (ref) {
     const diff = localDayNumber(d, timezone) - localDayNumber(ref, timezone)
-    const key = diff === 0 ? 'day.today'
-      : diff === 1 ? 'day.tomorrow'
-      : diff === 2 ? 'day.dayAfterTomorrow'
-      : diff === -1 ? 'day.yesterday'
-      : null
+    const key = dayKeys[diff] ?? null
     if (key) return `${msg(locale, key)} ${time}`
+    const label = fallbackLabel?.(diff, locale)
+    if (label) return `${label} ${time}`
   }
 
   const date = new Intl.DateTimeFormat(tag, { timeZone: timezone, month: 'short', day: 'numeric' }).format(d)
   const weekday = new Intl.DateTimeFormat(tag, { timeZone: timezone, weekday: 'short' }).format(d)
   // 英文把星期放前面（Sat, Oct 3, 08:30），中文是"10月3日 周六 08:30"
   return locale === 'en' ? `${weekday}, ${date}, ${time}` : `${date} ${weekday} ${time}`
+}
+
+const STANDARD_DAY_KEYS: Readonly<Record<number, string>> = {
+  [-1]: 'day.yesterday',
+  [0]: 'day.today',
+  [1]: 'day.tomorrow',
+  [2]: 'day.dayAfterTomorrow',
+}
+
+const PREVIEW_DAY_KEYS: Readonly<Record<number, string>> = {
+  [-1]: 'day.yesterday',
+  [0]: 'day.today',
+  [1]: 'day.tomorrow',
+}
+
+/**
+ * 按用户时区格式化"日期 + 星期 + 时:分"，临近日期用相对词代替日期。
+ *
+ * 例：今天 08:30 / 明天 20:00 / 后天 09:00 / 昨天 10:00 / 10月3日 周六 08:30
+ *
+ * ⚠️ `ref` 是"以哪一天为今天"的参照。推送渲染必须传**发送时刻**，
+ *   而不是渲染那一刻的 `new Date()`：计划会提前算好并落库，
+ *   跨零点前算、零点后发的那条会写成"明天"。不传时退化为绝对日期。
+ */
+export function formatInZone(d: Date, timezone: string, locale: Locale, ref?: Date): string {
+  return formatInZoneWithDayKeys(d, timezone, locale, ref, STANDARD_DAY_KEYS)
+}
+
+/**
+ * 推送预览专用：以预览时刻为参照，所有日期都使用相对词。
+ *
+ * 与真实推送不同，预览需要回答“相对我现在是哪一天”，所以前一天/后一天
+ * 分别写成“昨天/明天”；当天写“今天”；更远写成“N 天前/后”。
+ */
+export function formatPreviewInZone(d: Date, timezone: string, locale: Locale, ref: Date): string {
+  return formatInZoneWithDayKeys(d, timezone, locale, ref, PREVIEW_DAY_KEYS, (diff, loc) => {
+    if (diff > 1) return msg(loc, 'preview.day.inDays', { n: diff })
+    if (diff < -1) return msg(loc, 'preview.day.daysAgo', { n: -diff })
+    return null
+  })
 }
 
 /** 把分钟数说成人话：提前 30 分钟 / 2 h early */

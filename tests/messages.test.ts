@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatInZone } from '../src/core/messages.ts'
+import { formatInZone, formatPreviewInZone } from '../src/core/messages.ts'
 
 const TZ = 'Asia/Shanghai' // UTC+8，无夏令时
 /** 参照：2026-10-03 09:00 北京时间（周六） */
@@ -50,5 +50,31 @@ describe('formatInZone：日期 + 星期 + 相对日', () => {
     // 10-02 17:00Z = 10-03 01:00 北京（今天）；同一时刻在 UTC 是 10-02（昨天）
     expect(formatInZone(new Date('2026-10-02T17:00:00Z'), TZ, 'zh-CN', REF)).toBe('今天 01:00')
     expect(formatInZone(new Date('2026-10-02T17:00:00Z'), 'UTC', 'zh-CN', REF)).toBe('昨天 17:00')
+  })
+})
+
+describe('formatPreviewInZone：预览正文的相对日', () => {
+  it('中文：所有日期都使用相对文案', () => {
+    // 10-02 04:00 北京 → 昨天
+    expect(formatPreviewInZone(new Date('2026-10-01T20:00:00Z'), TZ, 'zh-CN', REF)).toBe('昨天 04:00')
+    // 10-03 04:00 北京 → 今天
+    expect(formatPreviewInZone(new Date('2026-10-02T20:00:00Z'), TZ, 'zh-CN', REF)).toBe('今天 04:00')
+    // 10-04 04:00 北京 → 明天
+    expect(formatPreviewInZone(new Date('2026-10-03T20:00:00Z'), TZ, 'zh-CN', REF)).toBe('明天 04:00')
+    // 相差两天及以上使用 N 天前/后
+    expect(formatPreviewInZone(new Date('2026-09-30T20:00:00Z'), TZ, 'zh-CN', REF)).toBe('2 天前 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-04T20:00:00Z'), TZ, 'zh-CN', REF)).toBe('2 天后 04:00')
+  })
+
+  it('繁体与英文使用各自的预览文案', () => {
+    expect(formatPreviewInZone(new Date('2026-10-01T20:00:00Z'), TZ, 'zh-TW', REF)).toBe('昨天 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-02T20:00:00Z'), TZ, 'zh-TW', REF)).toBe('今天 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-03T20:00:00Z'), TZ, 'zh-TW', REF)).toBe('明天 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-04T20:00:00Z'), TZ, 'zh-TW', REF)).toBe('2 天後 04:00')
+
+    expect(formatPreviewInZone(new Date('2026-10-01T20:00:00Z'), TZ, 'en', REF)).toBe('yesterday 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-02T20:00:00Z'), TZ, 'en', REF)).toBe('today 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-03T20:00:00Z'), TZ, 'en', REF)).toBe('tomorrow 04:00')
+    expect(formatPreviewInZone(new Date('2026-10-04T20:00:00Z'), TZ, 'en', REF)).toBe('in 2 d 04:00')
   })
 })
