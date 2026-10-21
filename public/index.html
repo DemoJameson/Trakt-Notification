@@ -300,9 +300,9 @@ select.inp{cursor:pointer;appearance:none;padding-right:30px;
   /* 等宽数字（22:45 不会因字形不同而左右跳）；刻意不挂 .mono —— 见 posterHtml 的注释 */
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   letter-spacing:0;font-variant-numeric:tabular-nums;pointer-events:none}
-/* 投递日志：每行是一个整体（海报 + 标题 + 正文），缩略图太小认不出是哪部片。
-   比 .sm大一档、比时间轴的 46px 小 —— 日志表列多，不适合再放大。 */
-.poster.md{width:52px;border-radius:6px}
+/* 投递日志：每行是一个整体（海报 + 标题 + 正文）。
+   与汇总缩略图统一为 64×78，避免同一列里普通行和汇总行的标题起点错位。 */
+.poster.md{width:64px;height:78px;aspect-ratio:auto;border-radius:6px}
 /* 渠道卡上"已配置项"的摘要。用 chip 排版而不是等宽字体的键值 dump ——
    键名是内部字段名，用户读不懂（2026-10-05）。 */
 .ch-summary{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px}
@@ -2782,6 +2782,22 @@ function posterHtml(url, isMovie, cls, href, label, badge) {
 }
 
 /**
+ * 每日汇总的日志缩略图。
+ *
+ * 产品规则：无论汇总里有多少内容，都只取首个影片的海报，避免同一部剧
+ * 因多条日历记录拼出两张不同的图。没有图时用 📚，不要显示普通条目的 ▶。
+ */
+function digestPosterHtml(urls) {
+  const first = (Array.isArray(urls) ? urls : []).find(function (u) {
+    return typeof u === 'string' && u.trim();
+  });
+  if (!first) {
+    return '<div class="poster md"><span class="poster-fallback">📚</span></div>';
+  }
+  return posterHtml(first, false, 'md', '', '');
+}
+
+/**
  * 从 `item_key` 反推 Trakt 页面地址。
  *
  * 键格式见 `calendar.ts` 的 `episodeKey` / `movieKey`：
@@ -3764,7 +3780,9 @@ function viewLogs() {
       '<td style="white-space:nowrap"><b>' + esc(fmtTime(new Date(d.notifyAt))) + '</b><br>' +
         '<span style="color:var(--text-3);font-size:11px">' + esc(fmtDay(new Date(d.notifyAt))) + '</span></td>' +
       '<td><div style="display:flex;gap:11px;align-items:flex-start">' +
-        posterHtml(d.posterUrl, isMovieKey(d.itemKey), 'md', traktUrlFromItemKey(d.itemKey), d.title) +
+        (String(d.itemKey || '').indexOf('digest:') === 0
+          ? digestPosterHtml(d.posterUrls)
+          : posterHtml(d.posterUrl, isMovieKey(d.itemKey), 'md', traktUrlFromItemKey(d.itemKey), d.title)) +
         '<div style="min-width:0"><div style="font-weight:560">' + esc(d.title) + '</div>' +
         '<div style="color:var(--text-3);font-size:11.5px;white-space:pre-line">' + esc(d.body || '') + '</div>' +
         // 只有非成功状态才显示错误栏：成功条目不该挂 last_error，

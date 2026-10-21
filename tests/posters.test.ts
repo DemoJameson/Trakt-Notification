@@ -5,14 +5,26 @@
  *   1. `extended=images` 加在**每一个**日历端点上（漏一个 = 那个端点的条目永远没图）
  *   2. `images.poster` 是**数组**且元素是**相对路径**（少拼 `https://` 就是坏图）
  *   3. 域名白名单：外部数据里的 URL 不能无条件当 `<img src>` 用
- *   4. `item_key` 解析认不出来时返回 null（digest 一天十几部片，不能随便挑一张）
+ *   4. 普通 `item_key` 解析认不出来时返回 null；digest 用单独的首图索引
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { installMockFetch, type MockFetch } from './helpers/trakt-mock.ts'
 import { computeWindows, episodeImageUrl, fetchCalendar, posterUrl } from '../src/trakt/calendar.ts'
 import { TRAKT_MAX_DAYS } from '../src/core/limits.ts'
-import { indexPosters, lookupPosters, lookupTitles, posterKeyForItem, titleKeyPrefixForItem } from '../src/db/repos/posters.ts'
+import {
+  digestPosterKeyForItem,
+  extractDigestTitles,
+  indexDigestPosters,
+  indexPosterTitles,
+  indexPosters,
+  lookupDigestPosters,
+  lookupPosterTitles,
+  lookupPosters,
+  lookupTitles,
+  posterKeyForItem,
+  titleKeyPrefixForItem,
+} from '../src/db/repos/posters.ts'
 import { createTestDb } from './helpers/sqlite.ts'
 import { cacheRepo } from '../src/db/repos/cache.ts'
 import { readFileSync } from 'node:fs'
@@ -236,7 +248,7 @@ describe('海报索引', () => {
     expect(posterKeyForItem('movie:234')).toBe('poster:movie:234')
   })
 
-  it('认不出来的 item_key 返回 null —— digest 一天十几部片，不能随便挑一张当它的图', () => {
+  it('普通索引不认识 digest —— 它需要独立首图索引', () => {
     expect(posterKeyForItem('digest:rule-1:2026-10-01:20:00')).toBeNull()
     expect(posterKeyForItem('')).toBeNull()
     expect(posterKeyForItem('episodic:abc:S01E01')).toBeNull()
@@ -275,6 +287,54 @@ describe('海报索引', () => {
   it('没写过的 id 查不到（而不是返回空串）', async () => {
     const cache = await newCache()
     expect((await lookupPosters(cache, ['episodic:1:S01E01'])).size).toBe(0)
+  })
+
+  it('digest 使用独立索引，只保留首个影片海报', async () => {
+    const cache = await newCache()
+    const key = 'digest:rule-1:2026-10-01:20:00'
+    expect(digestPosterKeyForItem(key)).toBe('poster:digest:rule-1:2026-10-01:20:00')
+
+    await indexDigestPosters(cache, [{
+      itemKey: key,
+      posterUrls: ['https://media.trakt.tv/a.webp', 'https://media.trakt.tv/b.webp', 'https://media.trakt.tv/a.webp'],
+    }])
+
+    const got = await lookupDigestPosters(cache, [key, 'episodic:1390:S02E07'])
+    expect(got.get(key)).toEqual(['https://media.trakt.tv/a.webp'])
+    expect(got.size).toBe(1)
+  })
+
+  it('digest 空图组不会被当成有图返回', async () => {
+    const cache = await newCache()
+    const key = 'digest:rule-1:2026-10-02:20:00'
+    await indexDigestPosters(cache, [{ itemKey: key, posterUrls: [] }])
+    expect((await lookupDigestPosters(cache, [key])).size).toBe(0)
+  })
+
+  it('从 digest 正文提取片名，并可按当前语言反查海报', async () => {
+    expect(extractDigestTitles(
+      '· 【本季完结】师兄啊师兄 S1E164 — 今天 10:00\n' +
+      '· 【电影】沙丘 (2024) — 今天 09:00\n' +
+      '……还有 2 条',
+    )).toEqual(['师兄啊师兄', '沙丘'])
+
+    const cache = await newCache()
+    await indexPosterTitles(cache, [
+      { title: '师兄啊师兄', posterUrl: 'https://media.trakt.tv/s.webp' },
+      { title: '沙丘', posterUrl: 'https://media.trakt.tv/m.webp' },
+    ], 'CN')
+    const got = await lookupPosterTitles(cache, ['师兄啊师兄', '沙丘'], 'CN')
+    expect(got.get('师兄啊师兄')).toBe('https://media.trakt.tv/s.webp')
+    expect(got.get('沙丘')).toBe('https://media.trakt.tv/m.webp')
+  })
+
+  it('旧的 title/poster 缓存也能反向回填片名海报', async () => {
+    const cache = await newCache()
+    await cache.set('title:CN:show:155534', { v: '师兄啊师兄' }, 3600)
+    await cache.set('poster:show:155534', 'https://media.trakt.tv/old.webp', 3600)
+
+    const got = await lookupPosterTitles(cache, ['师兄啊师兄'], 'CN')
+    expect(got.get('师兄啊师兄')).toBe('https://media.trakt.tv/old.webp')
   })
 })
 

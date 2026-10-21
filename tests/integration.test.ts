@@ -663,6 +663,36 @@ describe('内容筛选真的生效', () => {
     expect(mock.countOf('/calendars/my/shows/')).toBe(0)
     expect(mock.countOf('/calendars/my/movies/')).toBe(1)
   })
+
+  it('每日汇总只把首个海报写入独立索引', async () => {
+    const first = {
+      ...REGULAR_EPISODE,
+      episodeId: 123104,
+      posterUrl: 'https://media.trakt.tv/images/shows/123/posters/medium/a.webp',
+    }
+    const second = {
+      ...REGULAR_EPISODE,
+      episodeId: 123105,
+      number: 5,
+      episodeTitle: '第五集',
+      firstAired: '2026-10-01T02:30:00.000Z',
+      posterUrl: 'https://media.trakt.tv/images/shows/123/posters/medium/b.webp',
+    }
+    mock = installMockFetch(standardRoutes(calendarResponse([first, second])))
+    await h.deps.rules.insert(h.userId, {
+      name: '汇总', content: { episodes: { all: true } }, offsetMinutes: 0, mode: 'digest', digestTime: '20:00',
+    })
+    await h.deps.channels.insert(h.userId, {
+      type: 'webhook', name: 'wh', config: { url: 'https://hooks.example.com/abc' },
+    })
+
+    await runTick(h.deps, { now: NOW, skipLock: true })
+    const row = await h.db.first<{ key: string; value: string }>(
+      `SELECT key, value FROM cache WHERE key LIKE 'poster:digest:%'`,
+    )
+    expect(row?.key).toMatch(/^poster:digest:/)
+    expect(JSON.parse(row!.value)).toEqual([first.posterUrl])
+  })
 })
 
 /* ================================================================== */

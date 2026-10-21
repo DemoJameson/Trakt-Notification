@@ -15,7 +15,8 @@
  *
  * 所以改成：`{kind}:{traktId}` →海报 URL 的索引，日志页按 `item_key` 反查。
  * `item_key` 本来就带 trakt id（`episodic:1390:S02E07` / `movie:234`），
- * 解析出来就是索引键，不需要 deliveries 记任何新东西。
+ * 解析出来就是索引键，不需要 deliveries 记任何新东西。汇总消息没有单张海报，
+ * 另用 `digestPosters` 存首个海报，日志页据此显示缩略图。
  *
  * ## 索引是谁写的
  *
@@ -59,6 +60,21 @@ export function posterKeyForItem(itemKey: string): string | null {
   return null
 }
 
+/** 汇总 item_key 才有的独立海报索引；普通剧集/电影走 posterKeyForItem */
+export function digestPosterKeyForItem(itemKey: string): string | null {
+  if (!itemKey.startsWith('digest:')) return null
+  return CACHE_KEYS.digestPosters(itemKey.slice('digest:'.length))
+}
+
+/** 清理并去重海报 URL；空串不算图 */
+function cleanPosterUrls(urls: string[]): string[] {
+  return [...new Set(
+    urls
+      .filter((u) => typeof u === 'string' && u.trim())
+      .map((u) => u.trim()),
+  )]
+}
+
 /** 把一轮日历里的海报写进索引。冷门剧写空串（表示"确认没有"） */
 export async function indexPosters(
   cache: CacheRepo,
@@ -70,6 +86,27 @@ export async function indexPosters(
       await cache.set(CACHE_KEYS.poster(e.kind, e.traktId), e.posterUrl ?? '', POSTER_TTL_SECONDS)
     } catch {
       // 索引写失败只影响日志页有没有图，不该影响推送本身
+    }
+  }
+}
+
+/**
+ * 写入汇总消息的一组海报。
+ *
+ * 汇总日志按产品规则只展示首个影片的海报；这里只保留第一张，避免同一部剧
+ * 因多条日历记录产生多张不同海报。空数组也要写入，表示“确认这组没有图”。
+ */
+export async function indexDigestPosters(
+  cache: CacheRepo,
+  entries: Array<{ itemKey: string; posterUrls: string[] }>,
+): Promise<void> {
+  for (const e of entries) {
+    const key = digestPosterKeyForItem(e.itemKey)
+    if (!key) continue
+    try {
+      await cache.set(key, cleanPosterUrls(e.posterUrls).slice(0, 1), POSTER_TTL_SECONDS)
+    } catch {
+      // 和单张海报索引一样：写失败只影响日志页有没有图，不影响推送
     }
   }
 }
@@ -91,6 +128,126 @@ export async function lookupPosters(
     if (url) out.set(itemKey, url)
   }
   return out
+}
+
+/** 批量查汇总海报组：只回至少有一张图的 digest item_key。 */
+export async function lookupDigestPosters(
+  cache: CacheRepo,
+  itemKeys: string[],
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  for (const itemKey of new Set(itemKeys)) {
+    const key = digestPosterKeyForItem(itemKey)
+    if (!key) continue
+    try {
+      const v = await cache.get<string[]>(key)
+      if (!Array.isArray(v)) continue
+      const urls = cleanPosterUrls(v).slice(0, 1)
+      if (urls.length) out.set(itemKey, urls)
+    } catch {
+      // 索引读失败不影响日志页本身
+    }
+  }
+  return out
+}
+
+/** 把片名归一化成缓存键；只做大小写和空白折叠，保留中文/标点语义。 */
+function normalizePosterTitle(title: string): string {
+  return title.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
+}
+
+/**
+ * 写入“本地化片名 → 海报”的反向索引。
+ *
+ * 这是历史 digest 的兜底：旧记录没有 `poster:digest:*` 海报缓存，
+ * 但正文里仍有片名；只要当前调度轮次见过同一部片，就能按片名找回海报。
+ * 不存空片名；没有海报的条目写空串，避免后续反复把它当成命中。
+ */
+export async function indexPosterTitles(
+  cache: CacheRepo,
+  entries: Array<{ title: string; posterUrl?: string }>,
+  country: string,
+): Promise<void> {
+  for (const e of entries) {
+    const title = normalizePosterTitle(e.title || '')
+    if (!title) continue
+    try {
+      await cache.set(CACHE_KEYS.posterTitle(country, title), e.posterUrl || '', POSTER_TTL_SECONDS)
+    } catch {
+      // 反查索引失败不影响推送/日志主体
+    }
+  }
+}
+
+/** 按当前界面语言的片名批量查海报；返回原始片名 → URL。 */
+export async function lookupPosterTitles(
+  cache: CacheRepo,
+  titles: string[],
+  country: string,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const missing: string[] = []
+  for (const raw of new Set(titles)) {
+    const title = normalizePosterTitle(raw)
+    if (!title) continue
+    try {
+      const url = await cache.get<string>(CACHE_KEYS.posterTitle(country, title))
+      if (typeof url === 'string' && url) out.set(raw, url)
+      else missing.push(raw)
+    } catch {
+      // 查不到就当没有图
+      missing.push(raw)
+    }
+  }
+
+  // 兼容标题索引上线前已经存在的历史记录：直接从旧 title:* / poster:*
+  // 缓存建立一次反向映射。只在有 miss 时扫描，正常命中不会付出这个成本。
+  if (!missing.length) return out
+  try {
+    const titleRows = await cache.list<{ v?: string | null }>(`title:${country}:`)
+    const posterRows = await cache.list<string>('poster:')
+    const titleById = new Map<string, string>()
+    for (const row of titleRows) {
+      const parts = row.key.split(':')
+      if (parts.length < 4 || (parts[2] !== 'show' && parts[2] !== 'movie')) continue
+      const v = row.value?.v
+      if (typeof v === 'string' && v.trim()) {
+        titleById.set(`${parts[2]}:${parts[3]}`, normalizePosterTitle(v))
+      }
+    }
+    const posterByTitle = new Map<string, string>()
+    for (const row of posterRows) {
+      const parts = row.key.split(':')
+      if (parts.length < 3 || (parts[1] !== 'show' && parts[1] !== 'movie')) continue
+      const title = titleById.get(`${parts[1]}:${parts[2]}`)
+      if (title && typeof row.value === 'string' && row.value) posterByTitle.set(title, row.value)
+    }
+    for (const raw of missing) {
+      const url = posterByTitle.get(normalizePosterTitle(raw))
+      if (url) out.set(raw, url)
+    }
+  } catch {
+    // 反向映射是增强项，失败时继续走“没有海报”的占位
+  }
+  return out
+}
+
+/**
+ * 从 digest 正文提取片名。
+ *
+ * `renderDigest` 的格式：
+ *   · 【本季完结】片名 S01E02 — 今天 09:00
+ *   · 【电影】片名 (2024) — 今天 09:00
+ * 标签可能没有；多余行（“还有 N 条”）不以 `·` 开头，自然跳过。
+ */
+export function extractDigestTitles(body: string): string[] {
+  const out = new Set<string>()
+  for (const line of String(body || '').split('\n')) {
+    const m = /^·\s*(?:【[^】]+】)*\s*(.+?)(?:\s+S\d+E\d+|\s+\(\d{4}\))?\s+—/.exec(line)
+    const title = m?.[1]?.trim()
+    if (title) out.add(title)
+  }
+  return [...out]
 }
 
 /** 空串 = "查过，确实没有"，与"没查过"要区分开，所以返回 null 而不是 '' */

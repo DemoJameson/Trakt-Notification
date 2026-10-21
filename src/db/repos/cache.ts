@@ -78,6 +78,23 @@ export function cacheRepo(db: Db) {
       await db.run(`DELETE FROM cache WHERE key = ?`, [key])
     },
 
+    /** 按前缀列出未过期缓存；只给需要做反向索引的少量场景用。 */
+    async list<T>(prefix: string): Promise<Array<{ key: string; value: T }>> {
+      const rows = await db.all<{ key: string; value: string }>(
+        `SELECT key, value FROM cache WHERE key LIKE ? AND expires_at > ?`,
+        [prefix + '%', Date.now()],
+      )
+      const out: Array<{ key: string; value: T }> = []
+      for (const row of rows) {
+        try {
+          out.push({ key: row.key, value: JSON.parse(row.value) as T })
+        } catch {
+          // 坏缓存项跳过，不能让整个索引查询失败
+        }
+      }
+      return out
+    },
+
     /** 过期键只影响正确性为零（读的时候已经当它不存在），但会堆积 */
     async prune(): Promise<number> {
       const r = await db.run(`DELETE FROM cache WHERE expires_at <= ?`, [Date.now()])
@@ -140,6 +157,12 @@ export const CACHE_KEYS = {
    * 键只放 trakt id，不放密钥：这个表在管理页可读。
    */
   poster: (kind: 'show' | 'movie', traktId: number) => `poster:${kind}:${traktId}`,
+
+  /** 汇总消息的首个海报；值仍是 string[]，按 digest groupKey 缓存 */
+  digestPosters: (groupKey: string) => `poster:digest:${groupKey}`,
+
+  /** 本地化片名 → 海报；用于回填没有 digest 海报缓存的历史日志 */
+  posterTitle: (country: string, title: string) => `poster:title:${country}:${title}`,
 
   /** 标题搜索的结果会随 TMDB 收录而变，键里带上年份避免同名不同年互相覆盖 */
   tmdbSearch: (kind: 'movie' | 'show', title: string, year?: number) =>

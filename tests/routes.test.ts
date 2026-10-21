@@ -7,7 +7,7 @@ import { createTestDb, fakeD1, testKey, type TestDb } from './helpers/sqlite.ts'
 import { calendarResponse, installMockFetch, type MockFetch, type MockRoute } from './helpers/trakt-mock.ts'
 import { createApp, type WorkerEnv } from '../src/index.ts'
 import { userRepo } from '../src/db/repos/users.ts'
-import { cacheRepo } from '../src/db/repos/cache.ts'
+import { CACHE_KEYS, cacheRepo } from '../src/db/repos/cache.ts'
 import { channelRepo } from '../src/db/repos/channels.ts'
 import { ruleRepo } from '../src/db/repos/rules.ts'
 import { tokenRepo } from '../src/db/repos/users.ts'
@@ -172,7 +172,7 @@ describe('投递日志的片名按当前界面语言显示', () => {
    * 正确做法与海报同一套路：**派生索引**。所以这条**必须打真接口**测 ——
    * 复刻一遍读取逻辑的话，把 `titles.get(...) ?? d.title` 改回去也照样全绿。
    */
-  async function seedDelivery(title = 'Slow Horses S6E4') {
+  async function seedDelivery(title = 'Slow Horses S6E4', body = 'body') {
     const users = userRepo(db)
     await users.upsertFromTrakt(
       { username: 'tester', slug: 'tester' },
@@ -190,8 +190,8 @@ describe('投递日志的片名按当前界面语言显示', () => {
     )
     await db.run(
       `INSERT INTO deliveries (id, user_id, rule_id, channel_id, item_key, notify_at, title, body, status, attempts, created_at)
-       VALUES ('d-logs', ?, 'r-logs', ?, 'episodic:155534:S6E4', ?, ?, 'body', 'sent', 1, ?)`,
-      [user.id, channelId, Date.now(), title, Date.now()],
+       VALUES ('d-logs', ?, 'r-logs', ?, 'episodic:155534:S6E4', ?, ?, ?, 'sent', 1, ?)`,
+      [user.id, channelId, Date.now(), title, body, Date.now()],
     )
     return user
   }
@@ -251,6 +251,37 @@ describe('投递日志的片名按当前界面语言显示', () => {
     expect(body.limit).toBeLessThanOrEqual(200)
     // 关键：返回行数不能超过被夹住的 limit（修复前 limit=-1 且行数 > -1）
     expect(body.deliveries.length).toBeLessThanOrEqual(body.limit)
+  })
+
+  it('digest 日志只返回首个影片海报', async () => {
+    const user = await seedDelivery('今天有 2 部剧更新')
+    const itemKey = 'digest:r-logs:2026-10-21:12:00'
+    await db.run(`UPDATE deliveries SET item_key = ? WHERE id = 'd-logs'`, [itemKey])
+    await cacheRepo(db).set(CACHE_KEYS.digestPosters(itemKey.slice('digest:'.length)), [
+      'https://media.trakt.tv/a.webp',
+      'https://media.trakt.tv/b.webp',
+    ], 3600)
+
+    const res = await req('/api/logs', { headers: await logCookie(user.id) })
+    const body = await res.json() as { deliveries: Array<{ posterUrl: string | null; posterUrls: string[] | null }> }
+    expect(body.deliveries[0]!.posterUrl).toBeNull()
+    expect(body.deliveries[0]!.posterUrls).toEqual(['https://media.trakt.tv/a.webp'])
+  })
+
+  it('旧 digest 没有海报缓存时按正文片名回填 posterUrls', async () => {
+    const body = '· 师兄啊师兄 S1E164 — 今天 10:00\n· 药屋少女的呢喃 S0E53 — 昨天 22:40'
+    const user = await seedDelivery('今天有 2 部剧更新', body)
+    const itemKey = 'digest:r-logs:2026-10-21:12:00'
+    await db.run(`UPDATE deliveries SET item_key = ? WHERE id = 'd-logs'`, [itemKey])
+    const cache = cacheRepo(db)
+    await cache.set('title:CN:show:1', { v: '师兄啊师兄' }, 3600)
+    await cache.set('poster:show:1', 'https://media.trakt.tv/a.webp', 3600)
+    await cache.set('title:CN:show:2', { v: '药屋少女的呢喃' }, 3600)
+    await cache.set('poster:show:2', 'https://media.trakt.tv/b.webp', 3600)
+
+    const res = await req('/api/logs', { headers: await logCookie(user.id) })
+    const json = await res.json() as { deliveries: Array<{ posterUrls: string[] | null }> }
+    expect(json.deliveries[0]!.posterUrls).toEqual(['https://media.trakt.tv/a.webp'])
   })
 })
 

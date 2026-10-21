@@ -29,7 +29,7 @@ import type { RuleRepo } from '../db/repos/rules.ts'
 import type { ShowMetaRepo } from '../db/repos/showMeta.ts'
 import type { UserRepo, User, UserCursor } from '../db/repos/users.ts'
 import { CACHE_KEYS } from '../db/repos/cache.ts'
-import { indexPosters } from '../db/repos/posters.ts'
+import { indexDigestPosters, indexPosterTitles, indexPosters } from '../db/repos/posters.ts'
 import { TICK_LOCK_KEY } from '../db/repos/locks.ts'
 import type { LockStore } from '../trakt/oauth.ts'
 import { tokenStatus } from '../db/repos/users.ts'
@@ -586,6 +586,13 @@ async function computeForUser(
       result.errors.push({ userId: user.id, message: `片名本地化失败：${(e as Error).message}` })
     }
   }
+  // 历史 digest 没有海报缓存时，日志页要靠“片名 → 海报”反查回填。
+  // 放在本地化之后，才能匹配正文里实际显示的中文/英文片名。
+  await indexPosterTitles(
+    deps.cache,
+    items.map((it) => ({ title: it.showTitle, posterUrl: it.posterUrl })),
+    titleCountry ?? 'en',
+  )
 
   // ---- e2. 已看标注（只在有规则需要时才拉）----
   if (anySkipWatched) {
@@ -720,9 +727,14 @@ async function refreshOne(deps: SchedulerDeps, user: UserLike, now: Date, result
     for (const g of digests) {
       const ctx = renderCtx(user, nameOf(c.rules, g.ruleId))
       const message = renderDigest(g, ctx)
+      const itemKey = `digest:${g.groupKey}`
+      await indexDigestPosters(deps.cache, [{
+        itemKey,
+        posterUrls: g.items.map((p) => p.item.posterUrl).filter((u): u is string => Boolean(u)),
+      }])
       jobs.push({
         ruleId: g.ruleId,
-        itemKey: `digest:${g.groupKey}`,
+        itemKey,
         notifyAt: g.sendAt.getTime(),
         payload: JSON.stringify(
           jobPayload(message, {

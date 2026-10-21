@@ -191,7 +191,7 @@ try {
       '\n;globalThis.__api = { I18N, LOCALES, LOCALE_NAME, S, t, esc, splitOffset, describeOffsetText,' +
       ' toggleContent, isFinaleOnlySel, isEmptyEpisodeSel, projectNotifyAt, newDraft, splitQuietHours, joinQuietHours,' +
       ' dayKey, fmtTime, fmtDay, OFFSET_UNITS, exclusivePartner, skipLabel, skipReasonText,' +
-      ' skippedGroupHtml, posterHtml, timelineItemHtml, timelineHtml, isAired, channelFormHtml,' +
+      ' skippedGroupHtml, posterHtml, digestPosterHtml, timelineItemHtml, timelineHtml, isAired, channelFormHtml,' +
       ' apiCall: api, LIMIT_FALLBACK, limit, syncOffsetFromUi, editorHtml, editorBodyHtml,' +
       ' ruleCardHtml, channelCardHtml, channelFormBodyHtml, draftFromRule,' +
       ' viewRules, viewChannels, viewPreview, markPreviewStale, loadPreview, channelSummaryHtml,' +
@@ -2218,6 +2218,29 @@ function testPostersLinkToTrakt() {
 }
 
 /**
+ * 每日汇总的日志图片：无论有几张，只取首个影片海报，不能拼图。
+ */
+function testDigestPosterHtml() {
+  console.log('\n[投递日志：汇总首个海报]')
+  const { digestPosterHtml } = api
+
+  const two = digestPosterHtml(['https://img/a.jpg', 'https://img/b.jpg'])
+  eq('两张输入只渲染首张', (two.match(/<img /g) || []).length, 1)
+  eq('首张海报地址正确', two.includes('src="https://img/a.jpg"'), true)
+  eq('不再生成拼图容器', two.includes('digest-poster'), false)
+
+  const five = digestPosterHtml([
+    'https://img/1.jpg', 'https://img/2.jpg', 'https://img/3.jpg',
+    'https://img/4.jpg', 'https://img/5.jpg',
+  ])
+  eq('五张输入也只渲染首张', (five.match(/<img /g) || []).length, 1)
+  eq('没有 +N 角标', five.includes('digest-more'), false)
+
+  const empty = digestPosterHtml([])
+  eq('没有海报时用汇总图标而不是播放图标', empty.includes('📚') && !empty.includes('▶'), true)
+}
+
+/**
  * 主题（浅色/深色/跟随系统）。
  *
  * 这里守的是三个**静默失效**点，每一个都不会报错、只会"看着没反应"：
@@ -2415,6 +2438,7 @@ testChannelTypeAlwaysLabel()
 testChannelDocsLink()
 testInlineEditing()
 testPostersLinkToTrakt()
+testDigestPosterHtml()
 testTimelineDayGridAutoFills()
 testRelativeTimeOnDayHeader()
 testSkippedRowsMatchTimelineShape()

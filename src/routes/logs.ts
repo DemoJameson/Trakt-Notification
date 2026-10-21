@@ -3,7 +3,13 @@ import type { AppBindings } from '../index.ts'
 import { currentUserId } from '../middleware/cron-auth.ts'
 import { FAIL_STREAK_LIMIT } from '../db/repos/channels.ts'
 import { inspectLock, pruneExpiredLocks, TICK_LOCK_KEY } from '../db/repos/locks.ts'
-import { lookupPosters, lookupTitles } from '../db/repos/posters.ts'
+import {
+  extractDigestTitles,
+  lookupDigestPosters,
+  lookupPosterTitles,
+  lookupPosters,
+  lookupTitles,
+} from '../db/repos/posters.ts'
 import { titleCountryForLocale } from '../trakt/i18n.ts'
 import { estimateIntervalSeconds } from '../core/cron.ts'
 
@@ -33,6 +39,7 @@ logRoutes.get('/', async (c) => {
   // 一页最多 200 条，全是本地缓存读取，不会发请求；查不到的就没有图。
   const itemKeys = items.map((d) => d.itemKey)
   const posters = await lookupPosters(ctx.cache, itemKeys)
+  const digestPosters = await lookupDigestPosters(ctx.cache, itemKeys)
 
   // 译名同理走**派生索引**，而不是直接显示 deliveries.title
   // （那是投递那一刻的历史事实，当时是英文就永远是英文）。
@@ -40,6 +47,23 @@ logRoutes.get('/', async (c) => {
   const user = await ctx.users.findById(userId)
   const country = user ? titleCountryForLocale(user.locale) : null
   const titles = await lookupTitles(ctx.cache, itemKeys, country)
+
+  // 旧 digest 记录可能没有 poster:digest 缓存（功能上线前产生的记录）。
+  // 正文里仍有片名，按当前语言的“片名 → 海报”索引补回一组图。
+  const digestTitles = new Set<string>()
+  for (const d of items) {
+    if (!d.itemKey.startsWith('digest:')) continue
+    for (const title of extractDigestTitles(d.body ?? '')) digestTitles.add(title)
+  }
+  const titlePosters = await lookupPosterTitles(ctx.cache, [...digestTitles], country ?? 'en')
+  const posterUrlsByItem = new Map(digestPosters)
+  for (const d of items) {
+    if (posterUrlsByItem.has(d.itemKey)) continue
+    const inferred = extractDigestTitles(d.body ?? '')
+      .map((title) => titlePosters.get(title))
+      .filter((url): url is string => Boolean(url))
+    if (inferred.length) posterUrlsByItem.set(d.itemKey, [inferred[0]!])
+  }
 
   return c.json({
     status,
@@ -56,6 +80,8 @@ logRoutes.get('/', async (c) => {
       body: d.body,
       // 没有就是 undefined（JSON 里不出现该键）——前端据此不渲染 <img>
       posterUrl: posters.get(d.itemKey) ?? null,
+      // 汇总消息只给首个影片海报，避免同一部剧拼出多张图
+      posterUrls: posterUrlsByItem.get(d.itemKey) ?? null,
       channelId: d.channelId,
       ruleId: d.ruleId,
       status: d.status,
