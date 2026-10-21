@@ -30,12 +30,13 @@ export interface FetchWindow {
  *
  * 为什么是它：日历端点的 `extended` 白名单是 `full|images|colors|streaming_ids`
  * （见 trakt-api 的 `calendars/index.ts` → `extendedMediaQuerySchema`），
- * 而 `showResponseSchema.images` / `movieResponseSchema.images` 的注释明写着
- * "Available if requesting extended `images`"。
+ * 而 show / movie / episode 的 images 字段都随这个参数返回；单集剧照在
+ * `episode.images.screenshot`（Trakt Images 文档列出的 episode 图片类型）。
  *
  * **实测（2026-10-04，真站 + 真实 token）**：
  *   `/calendars/my/shows/{date}/{days}?extended=images`
- *   → `show.images.poster` 是**数组**，元素是**相对路径**（没有 https:// 前缀）：
+ *   → `show.images.poster` / `episode.images.screenshot` 都是**数组**，
+ *     元素是**相对路径**（没有 https:// 前缀）：
  *     `["media.trakt.tv/images/shows/000/170/597/posters/medium/06fcce5450.jpg.webp"]`
  *
  * 也就是说海报**不额外花请求** —— 只是给本来就要发的请求多加一个查询参数。
@@ -59,18 +60,18 @@ const ENDPOINT_PATH: Record<TraktCalendarEndpoint, (w: FetchWindow) => string> =
 const TRAKT_IMAGE_ORIGIN = 'https://'
 
 /**
- * 允许当海报用的图床域名。
+ * 允许当图片用的图床域名。
  *
  * ⚠️ `127.0.0.1` / `localhost` **只因为本地假 Trakt 才在这儿** ——
  *    `scripts/fake-trakt.mjs` 现造SVG 占位海报（借真站某部剧的海报会让界面上
  *    「最后生还者」配着《权力的游戏》的图，一眼就知道对不上）。
  *    它只监听本机、只在本机演示时用，不构成对外的图片面 ——
- *    真站返回的永远是 `media.trakt.tv`。
+ *    真站返回的是 `media.trakt.tv` / `walter-r2.trakt.tv` 等 Trakt CDN。
  */
-const ALLOWED_POSTER_HOSTS = ['media.trakt.tv', '127.0.0.1', 'localhost']
+const ALLOWED_IMAGE_HOSTS = ['media.trakt.tv', 'walter-r2.trakt.tv', 'walter.trakt.tv', '127.0.0.1', 'localhost']
 
 /**
- * 把 `images.poster` 数组里的第一条变成可用URL。
+ * 把 Trakt 图片数组里的第一条变成可用 URL。
  *
  * ⚠️ 三层防护，缺一个都可能让 `<img src>` 变成跟踪像素或直接坏图：
  *   ① 数组可能为空（冷门剧确实没上传海报）
@@ -79,19 +80,29 @@ const ALLOWED_POSTER_HOSTS = ['media.trakt.tv', '127.0.0.1', 'localhost']
  *   ③ 只接受 Trakt 自己的图床。外部数据里的 URL 不能无条件信任：
  *      前端会拿它当 `<img src>` 发出去，而某些浏览器会带上 Referer。
  */
-export function posterUrl(images?: { poster?: string[] | null }): string | undefined {
-  const first = images?.poster?.find((p) => typeof p === 'string' && p.trim())
+function firstImageUrl(urls?: string[] | null): string | undefined {
+  const first = urls?.find((p) => typeof p === 'string' && p.trim())
   if (!first) return undefined
   const url = first.trim()
   const abs = /^https?:\/\//i.test(url) ? url : TRAKT_IMAGE_ORIGIN + url.replace(/^\/+/, '')
   // 图床域名白名单：只认 Trakt 自己的 CDN
   try {
     const host = new URL(abs).hostname.toLowerCase()
-    if (ALLOWED_POSTER_HOSTS.some((h) => host === h || host.endsWith('.' + h))) return abs
+    if (ALLOWED_IMAGE_HOSTS.some((h) => host === h || host.endsWith('.' + h))) return abs
   } catch {
     return undefined
   }
   return undefined
+}
+
+/** 影片海报：`images.poster[0]` */
+export function posterUrl(images?: { poster?: string[] | null }): string | undefined {
+  return firstImageUrl(images?.poster)
+}
+
+/** 当集剧照：Trakt 单集对象的 `images.screenshot[0]` */
+export function episodeImageUrl(images?: { screenshot?: string[] | null }): string | undefined {
+  return firstImageUrl(images?.screenshot)
 }
 
 /* ---------------- Trakt 响应形状（只声明用到的字段） ---------------- */
@@ -106,11 +117,12 @@ interface TraktIds {
 /** `?extended=images` 才有的字段。没加那个查询参数时整个对象缺失 */
 interface TraktImages {
   poster?: string[] | null
+  screenshot?: string[] | null
 }
 
 interface EpisodeEntry {
   first_aired: string | null
-  episode: { season: number; number: number; title: string; ids: TraktIds }
+  episode: { season: number; number: number; title: string; ids: TraktIds; images?: TraktImages }
   show: { title: string; year: number | null; ids: TraktIds; images?: TraktImages }
 }
 
@@ -195,6 +207,7 @@ function toEpisodeItem(r: EpisodeEntry): CalendarItem {
     tmdbId: r.show.ids.tmdb,
     imdbId: r.show.ids.imdb,
     posterUrl: posterUrl(r.show.images),
+    episodeImageUrl: episodeImageUrl(r.episode.images),
     // first_aired 理论上非空（日历端点只返回有播出时间的条目），兜底给当前时间避免崩溃
     firstAired: r.first_aired ? new Date(r.first_aired) : new Date(),
     year: r.show.year ?? undefined,

@@ -25,19 +25,31 @@
  * 那部分与渠道无关；而 image/url 不入库，加工多少都不会影响历史记录。
  */
 
-/** 图片策略。缺省值 = `poster`（没配过就发海报） */
-export type ImageMode = 'poster' | 'none' | 'fixed'
+/** 图片策略。缺省值 = `poster`（没配过就发影片海报） */
+export type ImageMode = 'poster' | 'episode' | 'none' | 'fixed'
 
 /**渠道配置里图片相关的键 */
 export interface ImageConfig {
   /**
    * `poster`（默认）= 用影片海报；
+   * `episode` = 用当集剧照；电影或缺少单集图时回退影片海报；
    * `none` = 不带图；
    * `fixed` = 用 `imageUrl` 填的固定图片。
    */
   imageMode?: string
   /** `imageMode === 'fixed'` 时使用的图片地址 */
   imageUrl?: string
+}
+
+/** 通知小图标策略（目前只有 Bark 使用） */
+export type IconMode = '' | 'poster' | 'episode' | 'fixed'
+
+/** 渠道配置里通知图标相关的键 */
+export interface IconConfig {
+  /** `''` = 不传图标；`poster` / `episode` 会转换成 Trakt `thumb` 小图 */
+  iconMode?: string
+  /** `iconMode === 'fixed'` 时使用 */
+  iconUrl?: string
 }
 
 /** 渠道配置里跳转链接相关的键 */
@@ -185,8 +197,10 @@ function buildInfuseUrl(ctx: EnrichContext): string {
 
 /** 一次通知里，图片/链接加工所需的全部信息 */
 export interface EnrichContext {
-  /** `NotifyMessage.image`（海报，可能 undefined） */
+  /** 影片海报（可能 undefined） */
   poster?: string
+  /** 当集剧照；电影没有这个字段 */
+  episodeImage?: string
   /** `NotifyMessage.url`（Trakt 链接） */
   traktUrl?: string
   mediaType: 'episode' | 'movie'
@@ -198,20 +212,60 @@ export interface EnrichContext {
 }
 
 /**
+ * 把 Trakt 图片 URL 换到 `thumb` 尺寸。
+ *
+ * Trakt 的图片路径形如 `.../posters/medium/hash.webp` 或
+ * `.../screenshots/medium/hash.webp`。通知图标会被 iOS 裁成小方块，
+ * 继续塞 `medium` 海报既浪费流量，也容易出现“把整张海报塞进指甲盖”的观感。
+ * 只替换尺寸段，不碰文件名/协议；已经是 `thumb` 的原样返回。
+ */
+export function smallImageUrl(url?: string): string | undefined {
+  const raw = (url || '').trim()
+  if (!/^https?:\/\//i.test(raw)) return undefined
+  try {
+    const parsed = new URL(raw)
+    parsed.pathname = parsed.pathname.replace(/\/(?:thumb|medium|full)\//i, '/thumb/')
+    return parsed.toString()
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * 按配置算出最终要用的图片地址。
  *
  * @returns 该发的图片地址；不该发时返回 undefined（渠道实现一律判 undefined）
  */
 export function resolveImage(cfg: ImageConfig, ctx: EnrichContext): string | undefined {
   // ⚠️ `none` 必须**优先于** fixed 判断 —— 否则选了"无图片"但填了 imageUrl 仍会发图。
-  const mode = (cfg.imageMode || 'poster') as ImageMode
+  const mode = (cfg.imageMode || 'poster').trim() as ImageMode
   if (mode === 'none') return undefined
+  // 当集剧照缺失（包括电影）时回退影片海报；不要让“选了当集”变成没图。
+  if (mode === 'episode') return ctx.episodeImage || ctx.poster
   if (mode === 'fixed') {
     const u = (cfg.imageUrl || '').trim()
     // 固定图也要求绝对 URL：相对路径在渠道那边无处可解析（没有 base）
     return /^https?:\/\//i.test(u) ? u : undefined
   }
   return ctx.poster
+}
+
+/**
+ * 按 Bark 的 `iconMode` 算出通知小图标。
+ *
+ * 图标与横幅大图独立：图标只取 `thumb` 小图；固定图标保持用户给的地址。
+ * 电影没有单集剧照，因此 `episode` 模式会回退影片海报（同样取 thumb）。
+ * 未配置或认不出的值返回 undefined —— Bark 会走系统默认，绝不能传空串。
+ */
+export function resolveIconImage(cfg: IconConfig, ctx: EnrichContext): string | undefined {
+  const mode = (cfg.iconMode ?? '').trim() as IconMode
+  if (mode === 'poster') return smallImageUrl(ctx.poster)
+  if (mode === 'episode') return smallImageUrl(ctx.episodeImage || ctx.poster)
+  if (mode === 'fixed') {
+    const u = (cfg.iconUrl || '').trim()
+    return /^https?:\/\//i.test(u) ? u : undefined
+  }
+  return undefined
 }
 
 /**

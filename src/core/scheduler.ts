@@ -41,7 +41,7 @@ import { createTmdbTitleClient, type TmdbTitleClient } from '../trakt/tmdb.ts'
 import { ensureShowMeta, runLimited } from '../trakt/metadata.ts'
 import { loadWatchedSet, markWatched } from '../trakt/watched.ts'
 import { groupDigests, plan, DEFAULT_HORIZON_MINUTES, type CalendarItem, type NotifyState, type PlannedNotification, type Rule, type SkipCode, type SkippedItem } from './planner.ts'
-import { resolveImage, resolveUrl, type EnrichContext } from '../channels/enrich.ts'
+import { resolveIconImage, resolveImage, resolveUrl, type EnrichContext } from '../channels/enrich.ts'
 import type { FinaleLevel } from './finale.ts'
 import { requiredEndpoints, type TraktCalendarEndpoint } from './selection.ts'
 import {
@@ -122,6 +122,8 @@ export interface DryRunEntry {
   firstAired: string
   /** 海报绝对 URL；冷门剧可能为 null（前端据此不渲染 <img>） */
   posterUrl?: string
+  /** 当集剧照绝对 URL；电影没有，前端预览仍用 posterUrl */
+  episodeImageUrl?: string
   /** 本条实际采用的偏移（恒等于规则的 offsetMinutes） */
   appliedOffset: number
   /**
@@ -152,6 +154,8 @@ export interface DryRunSkipEntry {
   firstAired: string
   /** 被过滤的条目也带海报 —— 预览页的"没收到"列表同样需要认得出是哪部片 */
   posterUrl?: string
+  /** 当集剧照；被过滤列表也保留，便于后续扩展/诊断 */
+  episodeImageUrl?: string
   detail?: Record<string, string | number>
 }
 
@@ -870,6 +874,7 @@ function enrichCtxFor(p: PlannedNotification): EnrichContext {
   const it = p.item
   return {
     poster: it.posterUrl,
+    episodeImage: it.episodeImageUrl,
     traktUrl: it.traktUrl,
     mediaType: it.mediaType,
     tmdbId: it.tmdbId,
@@ -959,6 +964,7 @@ async function sendOne(deps: SchedulerDeps, task: SendTask, result: TickResult):
         url: resolveUrl(task.channel.config, task.enrich),
       }
     : task.message
+  const iconImage = task.enrich ? resolveIconImage(task.channel.config, task.enrich) : undefined
 
   let sendResult
   try {
@@ -968,6 +974,7 @@ async function sendOne(deps: SchedulerDeps, task: SendTask, result: TickResult):
     // 国内几家（飞书/钉钉/企微）都出现过区域性抖动，这个保护很实在。
     sendResult = await def.send(message, task.channel.config, {
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      iconImage,
     })
   } catch (e) {
     // 网络异常等：走重试。**同样计入渠道失败计数** —— 熔断看的是"这个渠道连续
@@ -1074,6 +1081,7 @@ function pushDryRun(
     episode: p.item.episode,
     firstAired: p.item.firstAired.toISOString(),
     posterUrl: p.item.posterUrl,
+    episodeImageUrl: p.item.episodeImageUrl,
     appliedOffset: p.appliedOffset,
     tmdbId: p.item.tmdbId,
     traktId: p.item.mediaType === 'movie' ? p.item.traktId : (p.item.showTraktId ?? p.item.traktId),
@@ -1098,6 +1106,7 @@ function pushDryRunSkip(result: TickResult, s: SkippedItem): void {
     episode: it.episode,
     firstAired: it.firstAired.toISOString(),
     posterUrl: it.posterUrl,
+    episodeImageUrl: it.episodeImageUrl,
     detail: s.detail,
   })
 }

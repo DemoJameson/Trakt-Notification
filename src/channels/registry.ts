@@ -63,9 +63,11 @@ const COMMON_IMAGE_FIELDS: ChannelDefinition<any>['configFields'] = [
     //   也读不到那句说明。补充说明写进 help，它不会截断。
     options: [
       { value: 'poster', label: '影片海报' },
+      { value: 'episode', label: '当集剧照' },
       { value: 'none', label: '不带图片' },
       { value: 'fixed', label: '固定图片' },
     ],
+    help: '「当集剧照」仅剧集有；电影或缺少单集剧照时回退影片海报',
   },
   {
     name: 'imageUrl',

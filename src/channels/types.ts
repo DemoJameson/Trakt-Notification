@@ -131,6 +131,8 @@ export interface ChannelDefinition<C = unknown> {
 export interface SendOptions {
   /** 超时中断信号。不传表示不限时（只有本地调试会这样） */
   signal?: AbortSignal
+  /** 通知小图标（目前只有 Bark 的 `icon` 使用）；由调度层按渠道配置加工 */
+  iconImage?: string
 }
 
 /**

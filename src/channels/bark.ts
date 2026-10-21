@@ -26,7 +26,8 @@ export interface BarkConfig {
   /**
    * 通知小图标的取值（与 `image`（横幅大图）**是两个独立位置**，见 configFields 里的说明）。
    *
-   * 界面上只有 `''` / `poster` / `fixed` 三项。
+   * 界面上有 `''` / `poster` / `episode` / `fixed` 四项。
+   * `poster` / `episode` 由调度层统一换成 Trakt `thumb` 小图。
    */
   iconMode?: string
   /** `iconMode === 'fixed'` 时使用 */
@@ -42,36 +43,6 @@ export interface BarkConfig {
  * 分成两处字面量的话，改了一处就会出现"表单填 A、实际发到 B"。
  */
 const DEFAULT_SERVER_URL = 'https://api.day.app'
-
-/**
- * 按 `iconMode` 算出该发什么。
- *
- * - `''`（未配置）⇒ **不发这个键**。官方参数表只写了
- *   "设置后会替换通知里默认的 Bark 图标"，**没有**写留空时会从 `url` 取站点图标
- *   —— 那是用户实测（iOS 侧的通知图标回退），官方未文档化。
- *   所以这里**不做任何推断**：留空就真的不发，剩下交给 Bark / iOS。
- * - `'poster'` ⇒ 用影片海报（即 `msg.image`）。
- * - `'fixed'` ⇒ 用 `iconUrl`；地址不合法就**不发**
- *   （悄悄回退到海报/默认等于替用户换了一张图）。
- *
- * ⚠️ 认不出的值一律当"不发"：宁可少发一个键，也不要猜。
- *
- * 🔴 **绝不能发空字符串**：Bark 会当成"配了个空图标"并覆盖掉默认值，
- * 结果比不传更糟（连系统按 `url` 取图标的机会都没有）。
- */
-function resolveIcon(
-  mode: string | undefined,
-  iconUrl: string | undefined,
-  image: string | undefined,
-): string | undefined {
-  const m = (mode ?? '').trim()
-  if (m === 'poster') return /^https?:\/\//i.test(image || '') ? image : undefined
-  if (m === 'fixed') {
-    const u = (iconUrl || '').trim()
-    return /^https?:\/\//i.test(u) ? u : undefined
-  }
-  return undefined
-}
 
 export const barkChannel: ChannelDefinition<BarkConfig> = {
   type: 'bark',
@@ -125,7 +96,7 @@ export const barkChannel: ChannelDefinition<BarkConfig> = {
       // 所以「图标」与下面的公共「图片」**不是同一个位置**，各管各的。
       //   （我先前把海报塞进了 icon，于是海报被裁成指甲盖大的小人 —— 已修）
       //
-      // 三态与公共的「图片」保持一致（影片海报 / 固定），只是多一个
+      // 与公共的「图片」保持一致（影片海报 / 当集剧照 / 固定），只是多一个
       // 「Bark 默认」—— 因为不传 `icon` 时 Bark 用它自己的图标，
       // 而用户实测这种情况下系统会用 `url` 指向站点的图标（Apple 的通知图标行为）。
       // ⚠️ 官方文档只写了"设置后会替换默认的 Bark 图标"，
@@ -152,11 +123,10 @@ export const barkChannel: ChannelDefinition<BarkConfig> = {
       options: [
         { value: '', label: 'Bark 默认图标' },
         { value: 'poster', label: '影片海报' },
+        { value: 'episode', label: '当集剧照' },
         { value: 'fixed', label: '固定图标' },
       ],
-      // ⚠️ 这里**刻意不给 help**。`icon`（小方块）与 `image`（横幅大图）容易混，但那是**实现细节**：
-      //   三个选项字面意思已经够清楚，解释"这不是下面那个大图"反而在界面里
-      //   描述了一个用户看不到的东西。判据留给 send() 的注释。
+      help: '影片海报 / 当集剧照会使用 Trakt 小尺寸图；电影或缺少单集剧照时回退影片海报',
     },
     {
       name: 'iconUrl',
@@ -195,9 +165,9 @@ export const barkChannel: ChannelDefinition<BarkConfig> = {
       //   image = 横幅里的大图
       // 之前我把海报塞进了 icon —— 于是海报被裁成指甲盖大的小人，
       // 用户看到的是"图怎么这么小"，而这**不是**他们能通过配置解决的。
-      // 现在海报走 image，icon 只用用户明确选的那个。
+      // 现在海报走 image；icon 只用调度层算好的 thumb 小图（见 resolveIconImage）。
       //
-      icon: resolveIcon(cfg.iconMode, cfg.iconUrl, msg.image),
+      icon: opts?.iconImage,
       image: msg.image,
       url: msg.url,
       // 用 markdown 字段时 body 会被忽略，这里统一走 body 保证兼容性

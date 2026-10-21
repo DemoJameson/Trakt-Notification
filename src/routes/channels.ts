@@ -5,7 +5,7 @@ import { currentUserId } from '../middleware/cron-auth.ts'
 import { getChannel, listChannelMeta, withDefaults } from '../channels/registry.ts'
 import { assertAllowedHost, assertSafeUrl, type NotifyMessage } from '../channels/types.ts'
 import type { ChannelDefinition } from '../channels/types.ts'
-import { resolveImage, resolveUrl, type EnrichContext } from '../channels/enrich.ts'
+import { resolveIconImage, resolveImage, resolveUrl, type EnrichContext } from '../channels/enrich.ts'
 import { renderTest } from '../core/notifier.ts'
 import { runTick, type DryRunEntry } from '../core/scheduler.ts'
 import { resolveLocale } from '../core/messages.ts'
@@ -142,6 +142,7 @@ channelRoutes.post('/test', async (c) => {
   // 预览正文的远期相对日期只服务预览，测试推送要验证的是真实发送文案。
   const cfg = config ?? {}
   let message: NotifyMessage
+  let iconImage: string | undefined
   let sample: 'real' | 'fallback' = 'real'
   try {
     const now = new Date()
@@ -158,6 +159,7 @@ channelRoutes.post('/test', async (c) => {
       const e = entry as DryRunEntry
       const enrich: EnrichContext = {
         poster: e.posterUrl,
+        episodeImage: e.episodeImageUrl,
         traktUrl: e.traktUrl,
         mediaType: e.mediaType,
         tmdbId: e.tmdbId,
@@ -174,6 +176,7 @@ channelRoutes.post('/test', async (c) => {
         priority: e.priority,
         image: resolveImage(cfg, enrich),
       }
+      iconImage = resolveIconImage(cfg, enrich)
       message.url = resolveUrl(cfg, enrich) ?? e.traktUrl
     } else {
       message = renderTest(locale)
@@ -188,7 +191,7 @@ channelRoutes.post('/test', async (c) => {
     warnings.push('未能取到真实播出内容（可能还没授权 Trakt，或近期日历为空），本次用占位文案测试')
   }
 
-  const result = await def.send(message, cfg)
+  const result = await def.send(message, cfg, { iconImage })
 
   return c.json({ ...result, warnings, sample }, result.ok ? 200 : 502)
 })

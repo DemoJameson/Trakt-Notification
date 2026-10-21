@@ -2,7 +2,7 @@
  * 渠道的图片策略与跳转链接（`src/channels/enrich.ts`）。
  *
  * 钉住四件容易出错、又不会自己报错的事：
- *   1. `imageMode` 三态语义，**尤其 `none` 优先于 `imageUrl`**
+ *   1. `imageMode` 四态语义，**尤其 `none` 优先于 `imageUrl`**
  *   2. 模板占位符渲染不出时**必须退回 Trakt**，不能留 `undefined` 字面量
  *   3. 自定义模板**优先于**下拉选的（用户常要改其中几个占位符）
  *   4. **11 个渠道一个都不能漏**公共字段，但**图片字段只给真能发图的渠道**
@@ -13,8 +13,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   applyLinkTemplate,
+  resolveIconImage,
   resolveImage,
   resolveUrl,
+  smallImageUrl,
   unknownLinkFields,
   normalizeLinkTemplate,
   LINK_FIELD_NAMES,
@@ -25,7 +27,8 @@ import {
 import { CHANNELS, listChannelMeta, getChannel, normalizeConfig } from '../src/channels/registry.ts'
 
 const CTX: EnrichContext = {
-  poster: 'https://media.trakt.tv/p.webp',
+  poster: 'https://media.trakt.tv/images/shows/155534/posters/medium/p.webp',
+  episodeImage: 'https://media.trakt.tv/images/episodes/155534/screenshots/medium/e.webp',
   traktUrl: 'https://trakt.tv/shows/155534',
   mediaType: 'episode',
   tmdbId: 95480,
@@ -61,6 +64,16 @@ describe('图片策略', () => {
 
   it('fixed 的地址必须是绝对 URL（渠道那边没有 base 可解析相对路径）', () => {
     expect(resolveImage({ imageMode: 'fixed', imageUrl: '/local/a.png' }, CTX)).toBeUndefined()
+  })
+
+  it('episode = 用当集剧照，而不是影片海报', () => {
+    expect(resolveImage({ imageMode: 'episode' }, CTX)).toBe(CTX.episodeImage)
+  })
+
+  it('episode 遇到电影或缺少单集图 ⇒ 回退影片海报', () => {
+    expect(resolveImage({ imageMode: 'episode' }, { ...CTX, mediaType: 'movie', episodeImage: undefined })).toBe(CTX.poster)
+    expect(resolveImage({ imageMode: 'episode' }, { ...CTX, episodeImage: undefined })).toBe(CTX.poster)
+    expect(resolveImage({ imageMode: 'episode' }, { ...CTX, episodeImage: '' })).toBe(CTX.poster)
   })
 
   it('本身没有海报时，三种模式都给 undefined（渠道一律判undefined）', () => {
@@ -328,7 +341,7 @@ describe('公共字段注入到每个渠道', () => {
       const f = c.configFields.find((x) => x.name === 'imageMode')
       expect(f, `${c.type} 没有 imageMode`).toBeTruthy()
       expect(f!.default).toBe('poster')
-      expect(f!.options?.map((o) => o.value).sort()).toEqual(['fixed', 'none', 'poster'])
+      expect(f!.options?.map((o) => o.value).sort()).toEqual(['episode', 'fixed', 'none', 'poster'])
     }
   })
 
@@ -358,7 +371,7 @@ describe('公共字段注入到每个渠道', () => {
 describe('Bark 的 icon 与 image 各归各位', () => {
   const bark = CHANNELS.find((c) => c.type === 'bark')!
 
-  async function sendWith(cfg: Record<string, unknown>, image?: string) {
+  async function sendWith(cfg: Record<string, unknown>, image?: string, iconImage?: string) {
     const calls: Array<Record<string, unknown>> = []
     const orig = globalThis.fetch
     globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
@@ -369,6 +382,7 @@ describe('Bark 的 icon 与 image 各归各位', () => {
       await bark.send(
         { title: 't', body: 'b', url: 'https://trakt.tv/x', priority: 'normal', image },
         { serverUrl: 'https://api.day.app', deviceKey: 'k', ...cfg } as never,
+        { iconImage },
       )
     } finally {
       globalThis.fetch = orig
@@ -396,28 +410,56 @@ describe('Bark 的 icon 与 image 各归各位', () => {
     }
   })
 
-  it('iconMode=poster ⇒ 用影片海报当小图标（这是与 image 独立的位置）', async () => {
-    const sent = await sendWith({ iconMode: 'poster' }, CTX.poster)
-    expect(sent.icon).toBe(CTX.poster)
-    // 两者可以都来自同一张海报，但**字段不同**——这正是 Bark 的两个参数
+  it('smallImageUrl 只把尺寸段换成 thumb，其他路径原样保留', () => {
+    expect(smallImageUrl(CTX.poster)).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
+    expect(smallImageUrl(CTX.episodeImage)).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.webp')
+    expect(smallImageUrl('https://media.trakt.tv/images/shows/1/posters/thumb/p.webp')).toBe(
+      'https://media.trakt.tv/images/shows/1/posters/thumb/p.webp',
+    )
+    expect(smallImageUrl('/relative.webp')).toBeUndefined()
+  })
+
+  it('iconMode=poster ⇒ 用影片海报的 thumb 小图（这是与 image 独立的位置）', async () => {
+    const icon = resolveIconImage({ iconMode: 'poster' }, CTX)
+    const sent = await sendWith({ iconMode: 'poster' }, CTX.poster, icon)
+    expect(icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
+    expect(sent.icon).toBe(icon)
+    // 横幅大图仍是正常尺寸的海报，**字段不同**——这正是 Bark 的两个参数
     expect(sent.image).toBe(CTX.poster)
   })
 
+  it('iconMode=episode ⇒ 用当集剧照的 thumb 小图', async () => {
+    const icon = resolveIconImage({ iconMode: 'episode' }, CTX)
+    const sent = await sendWith({ iconMode: 'episode' }, resolveImage({ imageMode: 'episode' }, CTX), icon)
+    expect(icon).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.webp')
+    expect(sent.icon).toBe(icon)
+    expect(sent.image).toBe(CTX.episodeImage)
+  })
+
+  it('iconMode=episode 遇到电影 ⇒ 用影片海报的 thumb 小图', () => {
+    const icon = resolveIconImage(
+      { iconMode: 'episode' },
+      { ...CTX, mediaType: 'movie', episodeImage: undefined },
+    )
+    expect(icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
+  })
+
   it('iconMode=fixed ⇒ 用填的地址', async () => {
-    const sent = await sendWith({ iconMode: 'fixed', iconUrl: 'https://x.test/i.png' }, CTX.poster)
+    const icon = resolveIconImage({ iconMode: 'fixed', iconUrl: 'https://x.test/i.png' }, CTX)
+    const sent = await sendWith({ iconMode: 'fixed', iconUrl: 'https://x.test/i.png' }, CTX.poster, icon)
     expect(sent.icon).toBe('https://x.test/i.png')
   })
 
   it('🔴 固定图标地址不合法 ⇒ 不发该键，绝不悄悄回退到海报', async () => {
     // 回退等于替用户换了一张图，他完全不知情。
     for (const iconUrl of ['/icon.svg', 'icon.svg', '   ', '']) {
-      const sent = await sendWith({ iconMode: 'fixed', iconUrl }, CTX.poster)
+      const sent = await sendWith({ iconMode: 'fixed', iconUrl }, CTX.poster, resolveIconImage({ iconMode: 'fixed', iconUrl }, CTX))
       expect('icon' in sent, JSON.stringify(iconUrl)).toBe(false)
     }
   })
 
   it('iconMode=poster 但没有海报 ⇒ 不发（宁可不发，别发空串）', async () => {
-    const sent = await sendWith({ iconMode: 'poster' }, undefined)
+    const sent = await sendWith({ iconMode: 'poster' }, undefined, resolveIconImage({ iconMode: 'poster' }, { ...CTX, poster: undefined }))
     expect('icon' in sent).toBe(false)
   })
 
@@ -426,10 +468,10 @@ describe('Bark 的 icon 与 image 各归各位', () => {
     expect(sent.image ?? '').toBe('')
   })
 
-  it('通知图标是三态下拉（Bark 默认 / 影片海报 / 固定图标）', () => {
+  it('通知图标是四态下拉（Bark 默认 / 影片海报 / 当集剧照 / 固定图标）', () => {
     const f = bark.configFields.find((x) => x.name === 'iconMode')!
     expect(f.type).toBe('select')
-    expect(f.options?.map((o) => o.value).sort()).toEqual(['', 'fixed', 'poster'])
+    expect(f.options?.map((o) => o.value).sort()).toEqual(['', 'episode', 'fixed', 'poster'])
     // 🔴 不提供「不带图标」：对 Bark 而言它和不传 icon 完全等价，
     //   给一个做不到的选项，用户选了以为关掉了、实际还是系统回退那一张。
     expect(f.options?.map((o) => o.value)).not.toContain('none')

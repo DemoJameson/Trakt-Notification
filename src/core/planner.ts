@@ -62,6 +62,14 @@ export interface CalendarItem {
    */
   posterUrl?: string
 
+  /**
+   * 当集剧照绝对 URL（来自 `episode.images.screenshot`，同样零额外请求）。
+   *
+   * 只用于“当集剧照”通知策略；电影没有这个字段，届时回退 `posterUrl`。
+   * 冷门剧/旧接口可能没有截图，所以同样可能为 undefined。
+   */
+  episodeImageUrl?: string
+
   traktUrl: string
   /** 来自 /sync/progress/watched：用户是否已看过 */
   watched?: boolean

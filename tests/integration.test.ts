@@ -1717,6 +1717,11 @@ async function waitFor<T>(probe: () => Promise<T | null>, timeoutMs = 2000): Pro
 describe('渠道的图片与跳转链接', () => {
   let h: Harness
   let sent: Array<{ url?: string; image?: string; body: string }>
+  const IMAGE_EPISODE = {
+    ...FINALE_EPISODE,
+    posterUrl: 'https://media.trakt.tv/images/shows/123/posters/medium/p.webp',
+    episodeImageUrl: 'https://media.trakt.tv/images/episodes/123/screenshots/medium/e.webp',
+  }
 
   beforeEach(async () => {
     h = await setup()
@@ -1724,10 +1729,10 @@ describe('渠道的图片与跳转链接', () => {
   })
 
   /** 一个能记录收到的 url/image 的假 webhook */
-  async function seedChannel(cfg: Record<string, unknown>) {
+  async function seedChannel(cfg: Record<string, unknown>, episode = FINALE_EPISODE) {
     // webhook 请求由下面的 wrapFetch **顶替**（它要记录 body），
     // 所以 mock 里不配该路由 —— 配了会走两遍，计数翻倍。
-    mock = installMockFetch(standardRoutes(calendarResponse([FINALE_EPISODE])))
+    mock = installMockFetch(standardRoutes(calendarResponse([episode])))
 
     // 自己记一份，比解析响应体可靠（webhook 的字段名不该成为测试的负担）
     wrapFetch((input, init) => {
@@ -1752,12 +1757,17 @@ describe('渠道的图片与跳转链接', () => {
   }
 
   it('默认发海报 + 跳 Trakt', async () => {
-    await seedChannel({})
+    await seedChannel({}, IMAGE_EPISODE)
     await runTick(h.deps, { now: NOW, skipLock: true })
     expect(sent.length).toBe(1)
-    // ⚠️ 这份日历数据没有 images ⇒ 海报是 undefined。所以只能验**链接**，
-    //    以及"没配就落回 Trakt 页"这个行为（海报本身由 tests/posters.test.ts 守）。
     expect(sent[0]!.url).toContain('trakt.tv')
+    expect(sent[0]!.image).toBe(IMAGE_EPISODE.posterUrl)
+  })
+
+  it('imageMode=episode ⇒ 用当集剧照，而不是影片海报', async () => {
+    await seedChannel({ imageMode: 'episode' }, IMAGE_EPISODE)
+    await runTick(h.deps, { now: NOW, skipLock: true })
+    expect(sent[0]!.image).toBe(IMAGE_EPISODE.episodeImageUrl)
   })
 
   it('imageMode=none ⇒ 不带图（有海报也不带）', async () => {

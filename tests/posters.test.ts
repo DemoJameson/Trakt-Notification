@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { installMockFetch, type MockFetch } from './helpers/trakt-mock.ts'
-import { computeWindows, fetchCalendar, posterUrl } from '../src/trakt/calendar.ts'
+import { computeWindows, episodeImageUrl, fetchCalendar, posterUrl } from '../src/trakt/calendar.ts'
 import { TRAKT_MAX_DAYS } from '../src/core/limits.ts'
 import { indexPosters, lookupPosters, lookupTitles, posterKeyForItem, titleKeyPrefixForItem } from '../src/db/repos/posters.ts'
 import { createTestDb } from './helpers/sqlite.ts'
@@ -87,6 +87,27 @@ describe('posterUrl', () => {
   it('取数组第一条可用项（跳过空串）', () => {
     expect(posterUrl({ poster: ['', 'media.trakt.tv/a.jpg.webp'] })).toBe('https://media.trakt.tv/a.jpg.webp')
   })
+
+  it('walter-r2.trakt.tv 也是官方图片 CDN', () => {
+    expect(posterUrl({ poster: ['walter-r2.trakt.tv/images/movies/1/posters/thumb/a.webp'] })).toBe(
+      'https://walter-r2.trakt.tv/images/movies/1/posters/thumb/a.webp',
+    )
+  })
+})
+
+describe('episodeImageUrl', () => {
+  it('读取 episode.images.screenshot[0]', () => {
+    expect(
+      episodeImageUrl({ screenshot: ['media.trakt.tv/images/episodes/1/screenshots/medium/e.webp'] }),
+    ).toBe('https://media.trakt.tv/images/episodes/1/screenshots/medium/e.webp')
+  })
+
+  it('没有截图 / 外部域名都返回 undefined', () => {
+    expect(episodeImageUrl(undefined)).toBeUndefined()
+    expect(episodeImageUrl({})).toBeUndefined()
+    expect(episodeImageUrl({ screenshot: ['', '  '] })).toBeUndefined()
+    expect(episodeImageUrl({ screenshot: ['https://evil.example.com/e.webp'] })).toBeUndefined()
+  })
 })
 
 /* ------------------------------------------------------------------ */
@@ -118,7 +139,41 @@ describe('日历端点都带 extended=images', () => {
     }
   })
 
-  it('剧集条目带上 show.images.poster[0]', async () => {
+  it('剧集条目同时带上 show.images.poster[0] 与 episode.images.screenshot[0]', async () => {
+    mock = installMockFetch([
+      {
+        match: '/calendars/my/shows/',
+        reply: () =>
+          new Response(
+            JSON.stringify([
+              {
+                first_aired: '2026-10-01T01:00:00.000Z',
+                episode: {
+                  season: 1,
+                  number: 1,
+                  title: 'Ep',
+                  ids: { trakt: 11 },
+                  images: { screenshot: ['media.trakt.tv/images/episodes/1/screenshots/medium/e.webp'] },
+                },
+                show: {
+                  title: 'Show',
+                  year: 2024,
+                  ids: { trakt: 10, slug: 's' },
+                  images: { poster: ['media.trakt.tv/images/shows/1/posters/medium/p.webp'] },
+                },
+              },
+            ]),
+            { status: 200 },
+          ),
+      },
+    ])
+
+    const items = await fetchCalendar(client(), ['shows'], { startDate: '2026-10-01', days: 7 })
+    expect(items[0]!.posterUrl).toBe('https://media.trakt.tv/images/shows/1/posters/medium/p.webp')
+    expect(items[0]!.episodeImageUrl).toBe('https://media.trakt.tv/images/episodes/1/screenshots/medium/e.webp')
+  })
+
+  it('没有单集截图时 episodeImageUrl 为 undefined，但影片海报仍保留', async () => {
     mock = installMockFetch([
       {
         match: '/calendars/my/shows/',
@@ -143,6 +198,7 @@ describe('日历端点都带 extended=images', () => {
 
     const items = await fetchCalendar(client(), ['shows'], { startDate: '2026-10-01', days: 7 })
     expect(items[0]!.posterUrl).toBe('https://media.trakt.tv/images/shows/1/posters/medium/p.webp')
+    expect(items[0]!.episodeImageUrl).toBeUndefined()
   })
 
   it('没有 images 字段时posterUrl 为 undefined（不报错、不填占位）', async () => {

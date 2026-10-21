@@ -106,6 +106,10 @@ export interface FakeEpisode {
   episodeTitle: string
   episodeId?: number
   firstAired: string
+  /** 影片海报 URL（可选；测试真实图片策略时用） */
+  posterUrl?: string
+  /** 当集剧照 URL（可选；映射到 episode.images.screenshot） */
+  episodeImageUrl?: string
   /**
    * TMDB id —— 真实 Trakt **一定**返回它（`show.ids.tmdb`）。
    *
@@ -125,12 +129,14 @@ export function calendarResponse(eps: FakeEpisode[]): unknown[] {
       number: e.number,
       title: e.episodeTitle,
       ids: { trakt: e.episodeId ?? e.showId * 1000 + e.season * 100 + e.number },
+      ...(e.episodeImageUrl ? { images: { screenshot: [e.episodeImageUrl] } } : {}),
     },
     show: {
       title: e.showTitle,
       year: e.year ?? 2024,
       // tmdb 与真实接口一样默认有值（真实值 = showId + 1e6，够区分且好认）
       ids: { trakt: e.showId, slug: e.slug ?? `show-${e.showId}`, tmdb: e.tmdbId ?? e.showId + 1_000_000 },
+      ...(e.posterUrl ? { images: { poster: [e.posterUrl] } } : {}),
     },
   }))
 }
