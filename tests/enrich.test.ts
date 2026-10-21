@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   applyLinkTemplate,
+  barkIconUrl,
   resolveIconImage,
   resolveImage,
   resolveUrl,
@@ -27,8 +28,8 @@ import {
 import { CHANNELS, listChannelMeta, getChannel, normalizeConfig } from '../src/channels/registry.ts'
 
 const CTX: EnrichContext = {
-  poster: 'https://media.trakt.tv/images/shows/155534/posters/medium/p.webp',
-  episodeImage: 'https://media.trakt.tv/images/episodes/155534/screenshots/medium/e.webp',
+  poster: 'https://media.trakt.tv/images/shows/155534/posters/medium/p.jpg.webp',
+  episodeImage: 'https://media.trakt.tv/images/episodes/155534/screenshots/medium/e.jpg.webp',
   traktUrl: 'https://trakt.tv/shows/155534',
   mediaType: 'episode',
   tmdbId: 95480,
@@ -411,18 +412,29 @@ describe('Bark 的 icon 与 image 各归各位', () => {
   })
 
   it('smallImageUrl 只把尺寸段换成 thumb，其他路径原样保留', () => {
-    expect(smallImageUrl(CTX.poster)).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
-    expect(smallImageUrl(CTX.episodeImage)).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.webp')
-    expect(smallImageUrl('https://media.trakt.tv/images/shows/1/posters/thumb/p.webp')).toBe(
-      'https://media.trakt.tv/images/shows/1/posters/thumb/p.webp',
+    expect(smallImageUrl(CTX.poster)).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.jpg.webp')
+    expect(smallImageUrl(CTX.episodeImage)).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.jpg.webp')
+    expect(smallImageUrl('https://media.trakt.tv/images/shows/1/posters/thumb/p.jpg.webp')).toBe(
+      'https://media.trakt.tv/images/shows/1/posters/thumb/p.jpg.webp',
     )
     expect(smallImageUrl('/relative.webp')).toBeUndefined()
+  })
+
+  it('barkIconUrl 使用 thumb 的原始 JPEG/PNG，避开 Bark 对 WebP 图标的兼容问题', () => {
+    expect(barkIconUrl(CTX.poster)).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.jpg')
+    expect(barkIconUrl(CTX.episodeImage)).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.jpg')
+    expect(barkIconUrl('https://media.trakt.tv/images/shows/1/posters/thumb/p.png.webp')).toBe(
+      'https://media.trakt.tv/images/shows/1/posters/thumb/p.png',
+    )
+    expect(barkIconUrl('https://media.trakt.tv/images/shows/1/posters/thumb/p.webp')).toBe(
+      'https://media.trakt.tv/images/shows/1/posters/thumb/p.webp',
+    )
   })
 
   it('iconMode=poster ⇒ 用影片海报的 thumb 小图（这是与 image 独立的位置）', async () => {
     const icon = resolveIconImage({ iconMode: 'poster' }, CTX)
     const sent = await sendWith({ iconMode: 'poster' }, CTX.poster, icon)
-    expect(icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
+    expect(icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.jpg')
     expect(sent.icon).toBe(icon)
     // 横幅大图仍是正常尺寸的海报，**字段不同**——这正是 Bark 的两个参数
     expect(sent.image).toBe(CTX.poster)
@@ -431,7 +443,7 @@ describe('Bark 的 icon 与 image 各归各位', () => {
   it('iconMode=episode ⇒ 用当集剧照的 thumb 小图', async () => {
     const icon = resolveIconImage({ iconMode: 'episode' }, CTX)
     const sent = await sendWith({ iconMode: 'episode' }, resolveImage({ imageMode: 'episode' }, CTX), icon)
-    expect(icon).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.webp')
+    expect(icon).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.jpg')
     expect(sent.icon).toBe(icon)
     expect(sent.image).toBe(CTX.episodeImage)
   })
@@ -441,7 +453,7 @@ describe('Bark 的 icon 与 image 各归各位', () => {
       { iconMode: 'episode' },
       { ...CTX, mediaType: 'movie', episodeImage: undefined },
     )
-    expect(icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
+    expect(icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.jpg')
   })
 
   it('iconMode=fixed ⇒ 用填的地址', async () => {

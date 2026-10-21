@@ -232,6 +232,29 @@ export function smallImageUrl(url?: string): string | undefined {
 }
 
 /**
+ * Bark 通知图标专用的 Trakt 小图 URL。
+ *
+ * Bark 的 `IconProcessor` 把下载结果交给 `INImage(imageData:)`，WebP 在 iOS
+ * 通知图标路径上并不可靠（实测配置影片海报后仍显示 Bark 默认图标）。
+ * Trakt CDN 的同一张图片去掉末尾 `.webp` 后会返回原始 JPEG/PNG，且尺寸不变：
+ *   `.../posters/thumb/foo.jpg.webp` → `.../posters/thumb/foo.jpg`
+ * 因此图标走 thumb + 原始 JPEG；横幅 `image` 仍保留 Trakt 返回的 WebP。
+ */
+export function barkIconUrl(url?: string): string | undefined {
+  const thumb = smallImageUrl(url)
+  if (!thumb) return undefined
+  try {
+    const parsed = new URL(thumb)
+    if (/\.(?:jpe?g|png)\.webp$/i.test(parsed.pathname)) {
+      parsed.pathname = parsed.pathname.replace(/\.webp$/i, '')
+    }
+    return parsed.toString()
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * 按配置算出最终要用的图片地址。
  *
  * @returns 该发的图片地址；不该发时返回 undefined（渠道实现一律判 undefined）
@@ -259,8 +282,8 @@ export function resolveImage(cfg: ImageConfig, ctx: EnrichContext): string | und
  */
 export function resolveIconImage(cfg: IconConfig, ctx: EnrichContext): string | undefined {
   const mode = (cfg.iconMode ?? '').trim() as IconMode
-  if (mode === 'poster') return smallImageUrl(ctx.poster)
-  if (mode === 'episode') return smallImageUrl(ctx.episodeImage || ctx.poster)
+  if (mode === 'poster') return barkIconUrl(ctx.poster)
+  if (mode === 'episode') return barkIconUrl(ctx.episodeImage || ctx.poster)
   if (mode === 'fixed') {
     const u = (cfg.iconUrl || '').trim()
     return /^https?:\/\//i.test(u) ? u : undefined

@@ -1010,8 +1010,8 @@ describe('渠道测试推送', () => {
     episodeTitle: '此心安处',
     firstAired: new Date(Date.now() - 3600_000).toISOString(),
     tmdbId: 95480,
-    posterUrl: 'https://media.trakt.tv/images/shows/155534/posters/medium/p.webp',
-    episodeImageUrl: 'https://media.trakt.tv/images/episodes/155534/screenshots/medium/e.webp',
+    posterUrl: 'https://media.trakt.tv/images/shows/155534/posters/medium/p.jpg.webp',
+    episodeImageUrl: 'https://media.trakt.tv/images/episodes/155534/screenshots/medium/e.jpg.webp',
   }
 
   let sent: Array<Record<string, unknown>>
@@ -1121,13 +1121,13 @@ describe('渠道测试推送', () => {
 
   it('iconMode=poster ⇒ 通知图标用影片海报 thumb 小图', async () => {
     await testPush({ iconMode: 'poster' })
-    expect(sent[0]!.icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.webp')
+    expect(sent[0]!.icon).toBe('https://media.trakt.tv/images/shows/155534/posters/thumb/p.jpg')
     expect(sent[0]!.image).toBe(EP.posterUrl)
   })
 
   it('iconMode=episode ⇒ 通知图标用当集剧照 thumb 小图', async () => {
     await testPush({ iconMode: 'episode', imageMode: 'episode' })
-    expect(sent[0]!.icon).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.webp')
+    expect(sent[0]!.icon).toBe('https://media.trakt.tv/images/episodes/155534/screenshots/thumb/e.jpg')
     expect(sent[0]!.image).toBe(EP.episodeImageUrl)
   })
 
