@@ -36,7 +36,7 @@
     "@hono/node-server": "^1.13.7"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^26.6.5",
     "typescript": "^5.7.2",
     "vitest": "^5.0.5",
     "wrangler": "^4.149.0"
