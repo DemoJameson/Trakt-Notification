@@ -93,11 +93,27 @@ function renderItemWithAirTime(
  *
  * 一天更新好几部剧的用户不应该收到好几条推送 —— 合并成一条是默认行为。
  * 超过 8 条时截断并提示剩余数量，避免把推送渠道撑爆。
+ *
+ * 汇总只带一个代表条目的图标、封面和跳转链接：优先取前 8 条里第一条有海报的，
+ * 都没有海报时再取第一条有当集剧照的，最后才退回第一条。这样渠道不需要支持多图，
+ * 且图片与跳转目标始终来自同一条内容。
  */
+export const DIGEST_MAX_ITEMS = 8
+
+/** 汇总消息的代表条目；返回 undefined 只用于空分组兜底。 */
+export function digestFeatureItem(group: DigestGroup): PlannedNotification | undefined {
+  const shown = [...group.items]
+    .sort((a, b) => a.notifyAt.getTime() - b.notifyAt.getTime())
+    .slice(0, DIGEST_MAX_ITEMS)
+  return shown.find((p) => Boolean(p.item.posterUrl))
+    ?? shown.find((p) => Boolean(p.item.episodeImageUrl))
+    ?? shown[0]
+}
+
 export function renderDigest(group: DigestGroup, ctx: RenderContext): NotifyMessage {
   const items = [...group.items].sort((a, b) => a.notifyAt.getTime() - b.notifyAt.getTime())
-  const MAX = 8
-  const shown = items.slice(0, MAX)
+  const shown = items.slice(0, DIGEST_MAX_ITEMS)
+  const feature = digestFeatureItem(group)
 
   const showCount = new Set(items.filter((i) => i.item.mediaType === 'episode').map((i) => i.item.showTitle)).size
   const hasMovie = items.some((i) => i.item.mediaType === 'movie')
@@ -127,13 +143,16 @@ export function renderDigest(group: DigestGroup, ctx: RenderContext): NotifyMess
       : `· ${tag}${it.showTitle} ${msg(ctx.locale, 'epShort', { s: it.season ?? 0, e: it.episode ?? 0 })} — ${when}`
   })
 
-  if (items.length > MAX) {
-    lines.push(msg(ctx.locale, 'digest.more', { n: items.length - MAX }))
+  if (items.length > DIGEST_MAX_ITEMS) {
+    lines.push(msg(ctx.locale, 'digest.more', { n: items.length - DIGEST_MAX_ITEMS }))
   }
 
   return {
     title,
     body: lines.join('\n'),
+    // 只带一个代表条目：图片、链接必须指向同一条内容，不能拿 A 的海报跳 B。
+    image: feature?.item.posterUrl,
+    url: feature?.item.traktUrl,
     group: ctx.ruleName,
     // 汇总里只要有一条完结就抬高优先级
     priority: items.some((i) => i.finaleLevel !== 'none') ? 'high' : 'normal',

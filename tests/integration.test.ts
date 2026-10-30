@@ -664,7 +664,7 @@ describe('内容筛选真的生效', () => {
     expect(mock.countOf('/calendars/my/movies/')).toBe(1)
   })
 
-  it('每日汇总只把首个海报写入独立索引', async () => {
+  it('每日汇总只把代表条目的海报写入独立索引', async () => {
     const first = {
       ...REGULAR_EPISODE,
       episodeId: 123104,
@@ -692,6 +692,73 @@ describe('内容筛选真的生效', () => {
     )
     expect(row?.key).toMatch(/^poster:digest:/)
     expect(JSON.parse(row!.value)).toEqual([first.posterUrl])
+  })
+
+  it('每日汇总只带一个代表条目的封面和跳转链接', async () => {
+    const withoutPoster = {
+      ...REGULAR_EPISODE,
+      episodeId: 123104,
+      posterUrl: undefined,
+    }
+    const withPoster = {
+      ...REGULAR_EPISODE,
+      episodeId: 123105,
+      number: 5,
+      episodeTitle: '第五集',
+      firstAired: '2026-10-01T02:30:00.000Z',
+      posterUrl: 'https://media.trakt.tv/images/shows/123/posters/medium/b.webp',
+    }
+    mock = installMockFetch(standardRoutes(calendarResponse([withoutPoster, withPoster]), [
+      { match: 'hooks.example.com', reply: { ok: true } },
+    ]))
+    await h.deps.rules.insert(h.userId, {
+      name: '汇总', content: { episodes: { all: true } }, offsetMinutes: 0, mode: 'digest', digestTime: '08:00',
+    })
+    await h.deps.channels.insert(h.userId, {
+      type: 'webhook', name: 'wh', config: { url: 'https://hooks.example.com/abc' },
+    })
+
+    const r = await runTick(h.deps, { now: NOW, skipLock: true })
+    expect(r.sent).toBe(1)
+
+    const call = mock.log.find((entry) => entry.url.includes('hooks.example.com'))
+    expect(call?.body).toBeTruthy()
+    const payload = JSON.parse(call!.body!) as { image?: string; url?: string; text?: string }
+    expect(payload.image).toBe(withPoster.posterUrl)
+    expect(payload.url).toContain('/shows/shogun/seasons/1/episodes/5')
+    expect(payload.text).toContain('幕府将军')
+  })
+
+  it('每日汇总给 Bark 带一个图标、封面和跳转链接', async () => {
+    const episode = {
+      ...REGULAR_EPISODE,
+      posterUrl: 'https://media.trakt.tv/images/shows/123/posters/medium/p.jpg.webp',
+    }
+    mock = installMockFetch(standardRoutes(calendarResponse([episode]), [
+      { match: 'api.day.app', reply: { code: 200, message: 'ok' } },
+    ]))
+    await h.deps.rules.insert(h.userId, {
+      name: '汇总', content: { episodes: { all: true } }, offsetMinutes: 0, mode: 'digest', digestTime: '08:00',
+    })
+    await h.deps.channels.insert(h.userId, {
+      type: 'bark',
+      name: 'bark',
+      config: {
+        serverUrl: 'https://api.day.app',
+        deviceKey: 'test-key',
+        iconMode: 'poster',
+      },
+    })
+
+    const r = await runTick(h.deps, { now: NOW, skipLock: true })
+    expect(r.sent).toBe(1)
+
+    const call = mock.log.find((entry) => entry.url.includes('api.day.app'))
+    expect(call?.body).toBeTruthy()
+    const payload = JSON.parse(call!.body!) as { icon?: string; image?: string; url?: string }
+    expect(payload.icon).toBe('https://media.trakt.tv/images/shows/123/posters/thumb/p.jpg')
+    expect(payload.image).toBe(episode.posterUrl)
+    expect(payload.url).toContain('/shows/shogun/seasons/1/episodes/4')
   })
 })
 
@@ -876,6 +943,50 @@ describe('失败与重试', () => {
     const row = await h.db.first<{ status: string; attempts: number }>(`SELECT * FROM deliveries`)
     expect(row!.status).toBe('sent')
     expect(row!.attempts).toBe(2)
+  })
+
+  it('汇总首次失败后重试仍带图标、封面和链接', async () => {
+    const episode = {
+      ...REGULAR_EPISODE,
+      posterUrl: 'https://media.trakt.tv/images/shows/123/posters/medium/p.jpg.webp',
+    }
+    let fail = true
+    mock = installMockFetch(standardRoutes(calendarResponse([episode]), [
+      {
+        match: 'api.day.app',
+        reply: () => new Response(
+          JSON.stringify(fail ? { code: 500, message: 'boom' } : { code: 200, message: 'ok' }),
+          { status: fail ? 500 : 200 },
+        ),
+      },
+    ]))
+    await h.deps.rules.insert(h.userId, {
+      name: '汇总', content: { episodes: { all: true } }, offsetMinutes: 0, mode: 'digest', digestTime: '08:00',
+    })
+    await h.deps.channels.insert(h.userId, {
+      type: 'bark',
+      name: 'bark',
+      config: {
+        serverUrl: 'https://api.day.app',
+        deviceKey: 'test-key',
+        iconMode: 'poster',
+      },
+    })
+
+    const first = await runTick(h.deps, { now: NOW, skipLock: true })
+    expect(first.failed).toBe(1)
+
+    fail = false
+    const retryAt = new Date(NOW.getTime() + 2 * 60 * 1000)
+    const second = await runTick(h.deps, { now: retryAt, skipLock: true })
+    expect(second.sent).toBe(1)
+
+    const calls = mock.log.filter((entry) => entry.url.includes('api.day.app'))
+    expect(calls).toHaveLength(2)
+    const payload = JSON.parse(calls[1]!.body!) as { icon?: string; image?: string; url?: string }
+    expect(payload.icon).toBe('https://media.trakt.tv/images/shows/123/posters/thumb/p.jpg')
+    expect(payload.image).toBe(episode.posterUrl)
+    expect(payload.url).toContain('/shows/shogun/seasons/1/episodes/4')
   })
 
   /*

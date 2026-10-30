@@ -136,6 +136,34 @@ export function jobRepo(db: Db) {
       }))
     },
 
+    /**
+     * 按计划主键取回原始 payload。
+     *
+     * 失败重试不能只靠 deliveries 的 title/body 重建消息：图片、链接和
+     * 逐渠道加工上下文都只在 notification_jobs.payload 里。重试时复用原 payload
+     * 还能保证规则后来改了，也不会把旧通知按新规则重发。
+     */
+    async findByKey(ruleId: string, itemKey: string, notifyAt: number): Promise<NotificationJob | null> {
+      const r = await db.first<{
+        id: string; user_id: string; rule_id: string; item_key: string; notify_at: number; payload: string
+      }>(
+        `SELECT id, user_id, rule_id, item_key, notify_at, payload
+           FROM notification_jobs
+          WHERE rule_id = ? AND item_key = ? AND notify_at = ?
+          LIMIT 1`,
+        [ruleId, itemKey, notifyAt],
+      )
+      if (!r) return null
+      return {
+        id: r.id,
+        userId: r.user_id,
+        ruleId: r.rule_id,
+        itemKey: r.item_key,
+        notifyAt: r.notify_at,
+        payload: r.payload,
+      }
+    },
+
     /** 派发完成（已把所有渠道入队）。失败/重试由 deliveries 负责，与本表无关 */
     async markDone(id: string): Promise<void> {
       await db.run(`UPDATE notification_jobs SET status = 'done' WHERE id = ?`, [id])

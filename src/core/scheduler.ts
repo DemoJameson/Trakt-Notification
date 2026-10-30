@@ -47,6 +47,7 @@ import { requiredEndpoints, type TraktCalendarEndpoint } from './selection.ts'
 import {
   airLine,
   digestLineTime,
+  digestFeatureItem,
   renderDigest,
   renderItem,
   renderItemAt,
@@ -727,10 +728,12 @@ async function refreshOne(deps: SchedulerDeps, user: UserLike, now: Date, result
     for (const g of digests) {
       const ctx = renderCtx(user, nameOf(c.rules, g.ruleId))
       const message = renderDigest(g, ctx)
+      const feature = digestFeatureItem(g)
       const itemKey = `digest:${g.groupKey}`
       await indexDigestPosters(deps.cache, [{
         itemKey,
-        posterUrls: g.items.map((p) => p.item.posterUrl).filter((u): u is string => Boolean(u)),
+        // 汇总推送只带一个代表条目的封面，日志页也必须与推送一致。
+        posterUrls: feature?.item.posterUrl ? [feature.item.posterUrl] : [],
       }])
       jobs.push({
         ruleId: g.ruleId,
@@ -738,6 +741,8 @@ async function refreshOne(deps: SchedulerDeps, user: UserLike, now: Date, result
         notifyAt: g.sendAt.getTime(),
         payload: JSON.stringify(
           jobPayload(message, {
+            // 汇总的图标/图片/链接都从同一个代表条目加工，避免图片和跳转错位。
+            enrich: feature ? enrichCtxFor(feature) : undefined,
             dates: g.items.map((p) => ({ text: digestLineTime(p, g, ctx), at: p.notifyAt.getTime() })),
             locale: ctx.locale,
             timezone: ctx.timezone,
@@ -788,15 +793,7 @@ async function dispatch(
       continue
     }
 
-    const message: NotifyMessage = {
-      title: payload.title,
-      body: refreshDateLines(payload, now),
-      url: payload.url,
-      image: payload.image,
-      group: payload.group,
-      priority: payload.priority,
-      tags: payload.tags,
-    }
+    const message = messageFromPayload(payload, now)
 
     const channels = await deps.channels.listEnabled(job.userId)
     for (const ch of channels) {
@@ -830,12 +827,25 @@ interface JobPayload {
   image?: string
   group?: string
   tags?: string[]
-  /** 逐渠道的图片/链接加工上下文（见 channels/enrich.ts）；汇总消息没有 */
+  /** 逐渠道的图片/链接加工上下文（见 channels/enrich.ts）；汇总消息用代表条目 */
   enrich?: EnrichContext
   /** 日期行的重算输入 —— 派发时按真实发送时刻重写，见 refreshDateLines */
   dates?: DateRef[]
   locale?: Locale
   timezone?: string
+}
+
+/** 把持久化的 job payload 还原成本次发送要用的消息。 */
+function messageFromPayload(payload: JobPayload, now: Date): NotifyMessage {
+  return {
+    title: payload.title,
+    body: refreshDateLines(payload, now),
+    url: payload.url,
+    image: payload.image,
+    group: payload.group,
+    priority: payload.priority,
+    tags: payload.tags,
+  }
 }
 
 function jobPayload(
@@ -914,8 +924,8 @@ interface SendTask {
    * 同一条内容会发给 N 个渠道而每个渠道的图片/链接偏好不同。
    * 加工必须**逐渠道**做，所以放在发送前那一步。
    *
-   * `kind: 'digest'` 时是 undefined —— 汇总消息没有单一影片，
-   * 海报与按集跳转都无从谈起（本来 renderDigest 也不给 image/url）。
+   * 汇总消息也有一个代表条目（见 renderDigest / digestFeatureItem），
+   * 因此同样走逐渠道的图片/链接加工。
    */
   enrich?: EnrichContext
 }
@@ -1056,10 +1066,25 @@ async function processRetries(deps: SchedulerDeps, now: Date, result: TickResult
       await deps.deliveries.markSkipped(d.id, '渠道已停用，不再重试')
       continue
     }
+    // 重试优先复用原计划的 payload，保留图片/链接/图标加工上下文。
+    // 只有历史 job 已被清理或 payload 损坏时，才退回 deliveries 里的 title/body。
+    let message: NotifyMessage = { title: d.title, body: d.body ?? '', priority: 'normal' }
+    let enrich: EnrichContext | undefined
+    try {
+      const job = await deps.jobs.findByKey(d.ruleId, d.itemKey, d.notifyAt)
+      if (job) {
+        const payload = JSON.parse(job.payload) as JobPayload
+        message = messageFromPayload(payload, now)
+        enrich = payload.enrich
+      }
+    } catch {
+      // 坏 payload 不能阻塞重试；文本仍可发送。
+    }
     tasks.push({
       deliveryId: d.id,
       channel,
-      message: { title: d.title, body: d.body ?? '', priority: 'normal' },
+      message,
+      enrich,
       now: now.getTime(),
     })
   }
