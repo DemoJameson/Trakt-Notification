@@ -29,7 +29,7 @@
     "test:all": "npm run lint && npm run test:quick && npm run test:ui && npm test"
   },
   "dependencies": {
-    "@libsql/client": "^0.14.0",
+    "@libsql/client": "^0.18.0",
     "hono": "^4.6.14"
   },
   "optionalDependencies": {
