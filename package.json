@@ -33,7 +33,7 @@
     "hono": "^4.13.18"
   },
   "optionalDependencies": {
-    "@hono/node-server": "^2.1.8"
+    "@hono/node-server": "^2.1.9"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
