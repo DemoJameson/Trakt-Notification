@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
-    "hono": "^4.13.18"
+    "hono": "^4.13.19"
   },
   "optionalDependencies": {
     "@hono/node-server": "^2.1.9"
